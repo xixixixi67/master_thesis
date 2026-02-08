@@ -1,0 +1,36 @@
+# R files
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# Compiled files
+*.o
+*.so
+*.dll
+src/*.o
+src/*.so
+src/*.dll
+src/RcppExports.cpp
+R/RcppExports.R
+
+# Documentation
+man/*.Rd
+
+# Build files
+*.tar.gz
+*.zip
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*~
+*.swp
+*.swo
