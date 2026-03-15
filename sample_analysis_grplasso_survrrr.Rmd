@@ -1,0 +1,464 @@
+---
+title: "sample_analysis_grplasso_survrrr"
+output: pdf_document
+date: "2026-02-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# source needed packages and files
+```{r}
+library(Rcpp)
+library(RcppEigen)
+library(mstate)
+
+sourceCpp("src/grplasso_survrrr.cpp")
+source("grplasso_survrrr.R")
+sourceCpp("src/lasso_survrrr.cpp")
+source("lasso_survrrr.R")
+source("survRRR_functions.R")
+source("simdata_function_and_performance_functions.R")
+```
+
+# unpenalized model
+
+```{r}
+set.seed(20020607)
+n <- 1000
+p <- 10
+r <- 2
+k <- 6
+```
+
+```{r}
+sim_data1 <- simulations_data(n, p, r, k, case = 1, n_simulations = 200, store_dlong = TRUE)
+```
+
+```{r}
+rank_check(sim_data1$Beta_matrix)
+```
+
+```{r}
+perf_grplasso_1  <- simulations_fit_and_performance(sim_data1, p, k, n_simulations = 200, r, lambda_alpha = 0, group_labels = rep(1L, 10), method = "rrr_grplasso")
+```
+
+```{r}
+perf_lasso_1 <- simulations_fit_and_performance(sim_data1, p, k, n_simulations = 200, r, lambda_alpha = 0, method = "rrr_lasso")
+```
+
+```{r}
+perf_pen_1 <- simulations_fit_and_performance(sim_data1, 100, k, 10, r, lambda_alpha = 0, method = "pen")
+```
+
+```{r}
+comparison <- data.frame(
+  method   = c("rrr_grplasso", "rrr_lasso", "pen"),
+  mean_bias = c(mean(perf_grplasso_1$bias1), mean(perf_lasso_1$bias1), mean(perf_pen_1$bias1)),
+  mean_mse  = c(mean(perf_grplasso_1$mse1),  mean(perf_lasso_1$mse1),  mean(perf_pen_1$mse1)),
+  mean_corr = c(mean(perf_grplasso_1$cor_coeff_vec), mean(perf_lasso_1$cor_coeff_vec), mean(perf_pen_1$cor_coeff_vec))
+)
+print(comparison)
+```
+
+# penalized model (case 2)
+# 4 groups
+```{r}
+set.seed(20020607)
+n <- 3000
+p <- 30
+r <- 2
+k <- 12
+n_groups <- 3
+zero_blocks <- list(c(1, 1), c(3, 2), c(2, 1)) # group1 rank1; group3 rank2
+```
+
+## search the best lambda
+
+```{r}
+search_data <- simulations_data(n, p, r, k, n_simulations = 10, n_groups=n_groups, zero_blocks=zero_blocks, store_dlong = TRUE, case = 2, group_corr = 0.7)
+
+group_labels <- search_data$group_labels
+pred_names <- paste0("x", 1:p)
+```
+
+```{r}
+lambda_vector <- seq(1e-8,1e-2,length.out=4)
+lambda_grp_lasso_1 <- simulations_fit_find_best_lambda(search_data, lambda_vector, p, k, r, group_labels, method = "rrr_grplasso", n_folds_0 = 5)
+
+best_lam_grp_1 <- lambda_grp_lasso_1$best_lambda
+```
+
+```{r}
+lambda_vector <- seq(1e-8,1e-2,length.out=4)
+lambda_lasso_1  <- simulations_fit_find_best_lambda(search_data, lambda_vector, p, k, r, method = "rrr_lasso", n_folds_0 = 5)
+```
+
+```{r}
+lambda_vector <- seq(1e-18,1e-8,length.out=5)
+lambda_pen_1  <- simulations_fit_find_best_lambda(search_data, lambda_vector, p, k, r, method = "pen")
+```
+
+```{r}
+sim_data2 <- simulations_data(n, p, r, k, n_simulations = 10, store_dlong = TRUE,group_corr = 0.7)
+```
+
+```{r}
+rank_check(sim_data2$Beta_matrix)
+```
+
+```{r}
+perf_grplasso_2  <- simulations_fit_and_performance(sim_data2, p, k, n_simulations = 10, r, lambda_alpha = 0.001, group_labels, method = "rrr_grplasso")
+```
+
+```{r}
+perf_lasso_2 <- simulations_fit_and_performance(sim_data2, p, k, 10, r, lambda_alpha = 0.001, method = "rrr_lasso")
+```
+
+```{r}
+perf_pen_2  <- simulations_fit_and_performance(sim_data2, p, k, 10, r,
+               lambda_alpha = 1e-8, method = "pen")
+```
+
+```{r}
+comparison2 <- data.frame(
+  method   = c("rrr_grplasso", "rrr_lasso", "pen"),
+  mean_bias = c(mean(perf_grplasso_2$bias1), mean(perf_lasso_2$bias1), mean(perf_pen_2$bias1)),
+  mean_mse  = c(mean(perf_grplasso_2$mse1),  mean(perf_lasso_2$mse1), mean(perf_pen_2$mse1)),
+  mean_corr = c(mean(perf_grplasso_2$cor_coeff_vec), mean(perf_lasso_2$cor_coeff_vec), mean(perf_pen_2$cor_coeff_vec))
+)
+print(comparison2)
+```
+
+
+## lasso + gradient descent
+
+```{r}
+sim_data_l_1 <- simulations_data(n, p, r, k,
+                                n_simulations = n_simulations,
+                                case = 1)
+
+perf_l_1 <- simulations_fit_and_performance(
+  datas = sim_data_grpl_1,
+  p = p,
+  k = k,
+  n_simulations = n_simulations,
+  r = r,
+  lambda_alpha = 0,
+  group_labels = rep(1L, p),
+  lambda_idx   = 1
+  )
+```
+
+# fit models
+
+## group lasso + gradient descent
+```{r}
+group_labels <- rep(1:4, each = 3) # every 3 predictors form a group -> 4 groups
+lambda_seq <- seq(0,0.1,by=0.01)
+fit_grplasso <- solve_reduced_rank(
+  X            = X,
+  y_list       = y_list,
+  status_list  = status_list,
+  R            = 2,
+  group_labels = group_labels,
+  lambda_alpha = lambda_seq,
+  rho          = 0.01, # penalizaed factor for ridge
+  step_size    = 0.5,
+  max_iter     = 500,
+  verbose      = TRUE,
+  tol = 1e-6
+)
+```
+
+## lasso + gradient descent
+```{r}
+lambda_seq <- seq(0,0.01,by=0.001)
+fit_lasso <- solve_reduced_rank_lasso(
+  X            = X,
+  y_list       = y_list,
+  status_list  = status_list,
+  R            = 2,
+  lambda_alpha = lambda_seq,
+  rho          = 0.01, # penalizaed factor for ridge
+  step_size    = 0.5,
+  max_iter     = 500,
+  verbose      = TRUE,
+  tol = 1e-6
+)
+```
+
+## lasso + criss-cross
+```{r}
+data <- data.frame(id = 1:n)
+
+for(i in 1:K) {
+  data[[paste0("t", i)]] <- y_list[[i]]
+  data[[paste0("d", i)]] <- status_list[[i]]
+}
+for (i in 1:p) {
+  data[[paste0("x", i)]] <- X[, i]
+}
+```
+
+```{r}
+# Transition matrix(K outcomes) 
+tmat <- trans.comprisk(K)
+
+# Column names for survival times and event indicators (can be different depending on dataset that is used!)
+tnames <- paste("t", 1:K, sep="")
+dnames <- paste("d", 1:K, sep="")
+
+# Create dlong
+dlong <- data.frame(
+  id = rep(data$id, each = K),
+  Tstart = 0,
+  Tstop = c(t(matrix(unlist(c(data[, tnames])), n, K))),
+  status = c(t(matrix(unlist(c(data[, dnames])), n, K))),
+  from = 1,
+  to = rep(2:(K+1), n),
+  trans = rep(1:K, n)
+)
+
+#add predictors (can be different depending on dataset that is used!)
+predictor_names <- grep("^x", names(data), value = TRUE)
+# Add each predictor to the dlong data frame
+for (predictor in predictor_names) {
+  dlong[[predictor]] <- rep(data[[predictor]], each = K)
+}
+
+# Calculate the time
+dlong$time <- dlong$Tstop - dlong$Tstart
+
+# Define the transition matrix and class 
+class(dlong) <- c("msdata", "data.frame")
+attr(dlong, "trans") <- tmat
+```
+
+```{r}
+predictor_names <- grep("^x", names(dlong), value = TRUE)
+formula_str <- paste("Surv(Tstop, status) ~", paste(predictor_names, collapse = " + "))
+formula <- as.formula(formula_str)
+```
+
+```{r}
+fit_lasso_2 <- pen.survrrr(formula, dat = dlong, R = 2,Gamma.iter = t(Gamma_true), 
+          eps = 1e-4, 
+          lambda.alpha = 0.005, 
+          lambda.gamma = 0.005,  
+          standardize.opt = F,
+          alpha = 1)
+```
+
+# compare B (identifiable)
+## group lasso + gradient descent
+```{r}
+B_hat_grplasso <- fit_grplasso[["result"]][[2]][["B"]]
+B_frob_grplasso <- norm(B_hat_grplasso - B_true, "F")
+B_rel_grplasso <- B_frob_grplasso/ norm(B_true, "F")
+B_frob_grplasso # ||B_hat - B_true||_F
+B_rel_grplasso # Relative error
+```
+
+```{r}
+per_outcome_grplasso <- data.frame(
+      outcome = paste0("k=", 1:K),
+      cor     = NA_real_,
+      mse     = NA_real_,
+      bias    = NA_real_,
+      rel_err = NA_real_
+    )
+    
+for(k in 1:K) {
+  b_hat_grplasso_k  <- B_hat_grplasso[, k]
+  b_true_k <- B_true[, k]
+  diff_k   <- b_hat_grplasso_k - b_true_k
+      
+  per_outcome_grplasso$cor[k]     <- cor(b_hat_grplasso_k, b_true_k)
+  per_outcome_grplasso$mse[k]     <- mean(diff_k^2)
+  per_outcome_grplasso$bias[k]    <- mean(diff_k)
+  per_outcome_grplasso$rel_err[k] <- sqrt(sum(diff_k^2)) / sqrt(sum(b_true_k^2))
+}
+per_outcome_grplasso
+```
+
+## lasso + gradient descent
+```{r}
+B_hat_lasso <- fit_lasso[["result"]][[8]][["B"]]
+B_frob_lasso <- norm(B_hat_lasso - B_true, "F")
+B_rel_lasso <- B_frob_lasso / norm(B_true, "F")
+B_frob_lasso # ||B_hat - B_true||_F
+B_rel_lasso # Relative error
+```
+
+```{r}
+per_outcome_lasso <- data.frame(
+      outcome = paste0("k=", 1:K),
+      cor     = NA_real_,
+      mse     = NA_real_,
+      bias    = NA_real_,
+      rel_err = NA_real_
+    )
+    
+for(k in 1:K) {
+  b_hat_lasso_k  <- B_hat_lasso[, k]
+  b_true_k <- B_true[, k]
+  diff_k   <- b_hat_lasso_k - b_true_k
+      
+  per_outcome_lasso$cor[k]     <- cor(b_hat_lasso_k, b_true_k)
+  per_outcome_lasso$mse[k]     <- mean(diff_k^2)
+  per_outcome_lasso$bias[k]    <- mean(diff_k)
+  per_outcome_lasso$rel_err[k] <- sqrt(sum(diff_k^2)) / sqrt(sum(b_true_k^2))
+}
+per_outcome_lasso
+```
+
+```{r}
+B_hat_lasso_2 <- fit_lasso_2$Alpha %*% fit_lasso_2$Gamma
+```
+
+```{r}
+B_frob_lasso_2 <- norm(B_hat_lasso_2 - B_true, "F")
+B_rel_lasso_2 <- B_frob_lasso_2 / norm(B_true, "F")
+B_frob_lasso_2 # ||B_hat - B_true||_F
+B_rel_lasso_2 # Relative error
+```
+
+```{r}
+per_outcome_lasso_2 <- data.frame(
+      outcome = paste0("k=", 1:K),
+      cor     = NA_real_,
+      mse     = NA_real_,
+      bias    = NA_real_,
+      rel_err = NA_real_
+    )
+    
+for(k in 1:K) {
+  b_hat_lasso_2_k  <- B_hat_lasso_2[, k]
+  b_true_k <- B_true[, k]
+  diff_k   <- b_hat_lasso_2_k - b_true_k
+      
+  per_outcome_lasso_2$cor[k]     <- cor(b_hat_lasso_2_k, b_true_k)
+  per_outcome_lasso_2$mse[k]     <- mean(diff_k^2)
+  per_outcome_lasso_2$bias[k]    <- mean(diff_k)
+  per_outcome_lasso_2$rel_err[k] <- sqrt(sum(diff_k^2)) / sqrt(sum(b_true_k^2))
+}
+per_outcome_lasso_2
+```
+
+# compare alpha and Gamma
+## functions
+```{r}
+procrustes <- function(A_hat, A_true) {
+      sv  <- svd(t(A_hat) %*% A_true)
+      Q   <- sv$v %*% t(sv$u)          # find optimal rotation to minimize ||alpha_hat%*%Q - alpha_true||_F
+      list(aligned = A_hat %*% Q, Q = Q)
+    }
+```
+
+```{r}
+# compare span(M1) and span(M2)
+subspace_dist <- function(M1, M2) {
+      Q1 <- qr.Q(qr(M1));  Q2 <- qr.Q(qr(M2)) # Orthonormal basis of span(M1)/span(M2)
+      sv <- pmin(svd(t(Q1) %*% Q2)$d, 1) # cosines of the principal angles between subspaces
+      list(angles_degree = acos(sv) * 180 / pi, # to degrees
+           subspace_distance  = sqrt(1 - min(sv)^2)) # subspace distance defined via the largest principal angle
+    }
+```
+
+```{r}
+# Varimax
+library(GPArotation)
+post_process <- function(alpha, Gamma) {
+  rot   <- varimax(alpha)
+  Q     <- rot$rotmat # Varimax finds an orthogonal rotation Q that maximizes the sparsity (simple structure) of the loadings
+  alpha_rot <- alpha %*% Q
+  Gamma_rot <- Gamma %*% Q
+  
+  # for each factor, ensure that the entry of alpha with the largest absolute magnitude is positive
+  for(r in 1:ncol(alpha_rot)) {
+    if(alpha_rot[which.max(abs(alpha_rot[,r])), r] < 0) {
+      alpha_rot[,r] <- -alpha_rot[,r]
+      Gamma_rot[,r] <- -Gamma_rot[,r]
+    }
+  }
+
+  ord <- order(sqrt(colSums(alpha_rot^2)), decreasing = TRUE) # factors with larger overall loading magnitude are placed first
+  list(alpha = alpha_rot[, ord], Gamma = Gamma_rot[, ord]) # return rotated and ordered factor matrices
+}
+```
+
+```{r}
+normalize_cols <- function(M) {
+  norms <- sqrt(colSums(M^2))
+  M %*% diag(1 / norms)
+}
+```
+
+## group lasso + gradient descent
+```{r}
+sa_grplasso <- subspace_dist(fit_grplasso[["result"]][[2]][["alpha"]], alpha_true)
+sa_grplasso
+sg_grplasso <- subspace_dist(fit_grplasso[["result"]][[2]][["Gamma"]], Gamma_true)
+sg_grplasso
+```
+
+```{r}
+pp_grplasso <- post_process(fit_grplasso$result[[2]]$alpha,
+                            fit_grplasso$result[[2]]$Gamma)
+
+
+alpha_pp_norm_grplasso <- normalize_cols(pp_grplasso$alpha)
+alpha_true_norm <- normalize_cols(alpha_true)
+pa_grplasso <- procrustes(alpha_pp_norm_grplasso, alpha_true_norm)
+for(r in 1:2)
+  cat(sprintf("Factor %d direction cor after Varimax: %.4f\n", r,
+              cor(pa_grplasso$aligned[,r], alpha_true_norm[,r])))
+```
+
+```{r}
+pp_lasso$alpha
+#pp$Gamma
+```
+
+## lasso + gradient descent
+```{r}
+sa_lasso <- subspace_dist(fit_lasso[["result"]][[8]][["alpha"]], alpha_true)
+sa_lasso
+sg_lasso <- subspace_dist(fit_lasso[["result"]][[8]][["Gamma"]], Gamma_true)
+sg_lasso
+```
+
+```{r}
+pp_lasso <- post_process(fit_lasso$result[[8]]$alpha,
+                         fit_lasso$result[[8]]$Gamma)
+
+
+alpha_pp_norm_lasso <- normalize_cols(pp_lasso$alpha)
+pa_lasso <- procrustes(alpha_pp_norm_lasso, alpha_true_norm)
+for(r in 1:2)
+  cat(sprintf("Factor %d direction cor after Varimax: %.4f\n", r,
+              cor(pa_lasso$aligned[,r], alpha_true_norm[,r])))
+```
+
+## lasso + criss_cross
+```{r}
+sa_lasso_2 <- subspace_dist(fit_lasso_2$Alpha, alpha_true)
+sa_lasso_2
+sg_lasso_2 <- subspace_dist(t(fit_lasso_2$Gamma), Gamma_true)
+sg_lasso_2
+```
+```{r}
+pp_lasso_2 <- post_process(fit_lasso_2$Alpha,
+                         t(fit_lasso_2$Gamma))
+
+
+alpha_pp_norm_lasso_2 <- normalize_cols(pp_lasso_2$alpha)
+pa_lasso_2 <- procrustes(alpha_pp_norm_lasso_2, alpha_true_norm)
+for(r in 1:2)
+  cat(sprintf("Factor %d direction cor after Varimax: %.4f\n", r,
+              cor(pa_lasso_2$aligned[,r], alpha_true_norm[,r])))
+```
+
+
