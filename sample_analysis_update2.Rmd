@@ -1,0 +1,977 @@
+---
+title: "sample_analysis_update2"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Source packages and files
+```{r}
+library(Rcpp)
+library(RcppEigen)
+library(mstate)
+library(tidyr)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(patchwork)
+
+sourceCpp("group_lasso_gd/grplasso_survrrr.cpp")
+source("group_lasso_gd/grplasso_survrrr.R")
+sourceCpp("lasso_gd/lasso_survrrr.cpp")
+source("lasso_gd/lasso_survrrr.R")
+sourceCpp("ridge_gd/ridge_survrrr.cpp")
+source("ridge_gd/ridge_survrrr.R")
+sourceCpp("mrcox/aligned.cpp")
+source("mrcox/mrcox.R")
+source("lasso_cc/survRRR_functions.R")
+source("simdata_function_and_performance_functions.R")
+```
+
+
+# Global parameters for case = 2
+```{r global-case2-params}
+rho_w <- 0.7    # within-group correlation for KMS Toeplitz on alpha
+rho_b <- 0.1    # between-group correlation for KMS Toeplitz on alpha
+rho_w_k <- 0.7    # within-group correlation for KMS Toeplitz on Gamma
+rho_b_k <- 0.1    # between-group correlation for KMS Toeplitz on Gamma
+mu_l <- 0.5    # lower bound for group mean (active groups)
+mu_u  <- 1.5   # upper bound for group mean (active groups)
+use_kms_beta <- TRUE  # use KMS covariance for A_matrix columns
+```
+
+# ============================================================
+# S0: Low-dimensional, no penalization
+# p=20, n=300, case=1
+# ============================================================
+```{r s0-data}
+n <- 300; p <- 20; r_true <- 2; k <- 4
+
+set.seed(7)
+sim_data0 <- simulations_data(n, p, r_true, k,
+                               case = 1,
+                               n_simulations = 100,
+                               store_dlong = TRUE)
+generate_data_plots(sim_data0$dlong_list[[1]], n = n, r = r_true, p = p, k = k)
+```
+
+```{r s0-fit}
+# lambda = 0
+lv_0 <- 0
+
+set.seed(7)
+auto_grplasso_0 <- simulations_fit_auto_rank(
+  sim_data0, p = p, k = k, n_simulations = 100,
+  lambda_vector = lv_0, group_labels = rep(1L, p),
+  method = "rrr_grplasso", rank_vector = c(1, 2, 3), n_datasets_cv = 10)
+
+auto_lasso_0 <- simulations_fit_auto_rank(
+  sim_data0, p = p, k = k, n_simulations = 100,
+  lambda_vector = lv_0, method = "rrr_lasso",
+  rank_vector = c(1, 2, 3), n_datasets_cv = 10)
+
+auto_ridge_0 <- simulations_fit_auto_rank(
+  sim_data0, p = p, k = k, n_simulations = 100,
+  lambda_vector = lv_0, method = "rrr_ridge",
+  rank_vector = c(1, 2, 3), n_datasets_cv = 10)
+
+auto_pen_0 <- simulations_fit_auto_rank(
+  sim_data0, p = p, k = k, n_simulations = 100,
+  lambda_vector = lv_0, method = "pen",
+  rank_vector = c(1, 2, 3), n_datasets_cv = 10)
+
+auto_mrcox_0 <- simulations_fit_auto_rank(
+  sim_data0, p = p, k = k, n_simulations = 100,
+  lambda_vector = lv_0, method = "mrcox",
+  rank_vector = c(1, 2, 3), n_datasets_cv = 10)
+```
+
+```{r s0-results}
+print_rank_comparisons(
+  list(auto_grplasso_0, auto_lasso_0, auto_ridge_0, auto_pen_0, auto_mrcox_0),
+  c("rrr_grplasso", "rrr_lasso", "rrr_ridge", "pen", "mrcox"),
+  "S0: n=300, p=20, case=1, lambda=0"
+)
+```
+
+# ============================================================
+# Penalized scenarios — case=2, p=100
+#  n (80/300) x n_groups (10/20) x zero_pct (40%/60%)
+# pen omitted for n=80 (n < p)
+# ============================================================
+
+# ============================================================
+# S1: n=80, 10 groups (size=10), 40% zero groups  [n < p]
+# ============================================================
+```{r s1-setup}
+n <- 80; p <- 100; r_true <- 2; k <- 4
+n_groups  <- 10
+zero_blocks <- c(1, 3, 5, 7)
+lv_1 <- seq(1e-2, 6e-1, length.out = 15)
+```
+
+```{r s1-data}
+set.seed(7)
+search_data_1 <- simulations_data(n, p, r_true, k,
+                                   n_simulations = 10,
+                                   n_groups      = n_groups,
+                                   zero_blocks   = zero_blocks,
+                                   store_dlong   = FALSE,
+                                   case          = 2,
+                                   group_corr    = 0.7,
+                                  scale = 0.15)
+group_labels_1 <- search_data_1$group_labels
+rank_check(search_data_1$Beta_matrix)
+```
+
+```{r}
+plot_B_true_boxplot(search_data_1, group_labels = group_labels_1,title = "S1 & S2: True B — 10 groups, 40% zero")
+```
+
+```{r s1-fit}
+set.seed(7)
+sim_data1 <- simulations_data(n, p, r_true, k,
+                               n_simulations = 100,
+                               n_groups      = n_groups,
+                               zero_blocks   = zero_blocks,
+                               store_dlong   = FALSE,
+                               case          = 2,
+                               group_corr    = 0.7,
+                               beta_obj      = search_data_1,
+                              scale = 0.15)
+
+auto_grplasso_1 <- simulations_fit_auto_rank(
+  sim_data1, datas_cv = search_data_1, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_1,
+  group_labels = group_labels_1, method = "rrr_grplasso",
+  rank_vector = c(1, 2, 3), n_folds_cv = 5, rho = 0.1)
+
+auto_lasso_1 <- simulations_fit_auto_rank(
+  sim_data1, datas_cv = search_data_1, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_1,
+  method = "rrr_lasso", rank_vector = c(1, 2, 3),
+  n_folds_cv = 5, rho = 0.1)
+
+auto_ridge_1 <- simulations_fit_auto_rank(
+  sim_data1, datas_cv = search_data_1, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_1,
+  method = "rrr_ridge", rank_vector = c(1, 2, 3),
+  n_folds_cv = 5, rho = 0.1)
+
+auto_mrcox_1 <- simulations_fit_auto_rank(
+  sim_data1, datas_cv = search_data_1, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_1,
+  method = "mrcox", rank_vector = c(1, 2, 3),
+  n_folds_cv = 5, rho = 0.1)
+```
+
+```{r s1-results}
+print_rank_comparisons(
+  list(auto_grplasso_1, auto_lasso_1, auto_ridge_1, auto_mrcox_1),
+  c("rrr_grplasso", "rrr_lasso", "rrr_ridge", "mrcox"),
+  "S1: n=80, 10g, sz=10, 40% zero"
+)
+```
+
+```{r s1-lambda-plots, fig.width=10, fig.height=4}
+gridExtra::grid.arrange(
+  lambda_plot_by_rank(auto_grplasso_1, "rrr_grplasso",
+                      title = "S1 Group Lasso"),
+  lambda_plot_by_rank(auto_lasso_1,    "rrr_lasso",
+                      title = "S1 Lasso"),
+  lambda_plot_by_rank(auto_ridge_1,    "rrr_ridge",
+                      title = "S1 Ridge"),
+  lambda_plot_by_rank(auto_mrcox_1,    "rrr_ridge",
+                      title = "S1 MrCox"),
+  
+  ncol = 4)
+```
+
+# ============================================================
+# S2: n=300, 10 groups (size=10), 40% zero  [n > p]
+# ============================================================
+```{r s2-setup}
+n <- 300; p <- 100; r_true <- 2; k <- 4
+n_groups    <- 10
+zero_blocks <- c(1, 3, 5, 7)
+lv_2        <- seq(1e-2, 6e-1, length.out = 15)
+lv_pen_2    <- seq(2e-3, 2e-2, length.out = 10)
+lv_mrcox_2  <- seq(1e-2, 1e-1, length.out = 10)
+```
+
+```{r s2-data}
+set.seed(7)
+search_data_2 <- simulations_data(n, p, r_true, k,
+                                   n_simulations = 10,
+                                   n_groups      = n_groups,
+                                   zero_blocks   = zero_blocks,
+                                   store_dlong   = TRUE,
+                                   case          = 2,
+                                   group_corr    = 0.7)
+group_labels_2 <- search_data_2$group_labels
+rank_check(search_data_2$Beta_matrix)
+```
+
+```{r s2-fit}
+set.seed(7)
+sim_data2 <- simulations_data(n, p, r_true, k,
+                               n_simulations = 100,
+                               n_groups      = n_groups,
+                               zero_blocks   = zero_blocks,
+                               store_dlong   = TRUE,
+                               case          = 2,
+                               group_corr    = 0.7,
+                               beta_obj      = search_data_2)
+
+auto_grplasso_2 <- simulations_fit_auto_rank(
+  sim_data2, datas_cv = search_data_2, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_2,
+  group_labels = group_labels_2, method = "rrr_grplasso",
+  rank_vector = c(1, 2, 3), n_folds_cv = 5)
+
+auto_lasso_2 <- simulations_fit_auto_rank(
+  sim_data2, datas_cv = search_data_2, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_2,
+  method = "rrr_lasso", rank_vector = c(1, 2, 3), n_folds_cv = 5)
+
+auto_ridge_2 <- simulations_fit_auto_rank(
+  sim_data2, datas_cv = search_data_2, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_2,
+  method = "rrr_ridge", rank_vector = c(1, 2, 3), n_folds_cv = 5)
+
+auto_pen_2 <- simulations_fit_auto_rank(
+  sim_data2, datas_cv = search_data_2, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_pen_2,
+  method = "pen", rank_vector = c(1, 2, 3), n_folds_cv = 5)
+
+auto_mrcox_2 <- simulations_fit_auto_rank(
+  sim_data2, datas_cv = search_data_2, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_mrcox_2,
+  method = "mrcox", rank_vector = c(1, 2, 3), n_folds_cv = 5)
+```
+
+```{r s2-results}
+print_rank_comparisons(
+  list(auto_grplasso_2, auto_lasso_2, auto_ridge_2, auto_pen_2, auto_mrcox_2),
+  c("rrr_grplasso", "rrr_lasso", "rrr_ridge", "pen", "mrcox"),
+  "S2: n=300, 10g, sz=10, 40% zero"
+)
+```
+
+```{r s2-lambda-plots, fig.width=13, fig.height=4}
+gridExtra::grid.arrange(
+  lambda_plot_by_rank(auto_grplasso_2, "rrr_grplasso",
+                      title = "S2 Group Lasso"),
+  lambda_plot_by_rank(auto_lasso_2,    "rrr_lasso",
+                      title = "S2 Lasso"),
+  lambda_plot_by_rank(auto_ridge_2,    "rrr_ridge",
+                      title = "S2 Ridge"),
+  lambda_plot_by_rank(auto_pen_2,      "pen",
+                      title = "S2 Pen"),
+  lambda_plot_by_rank(auto_mrcox_4,    "mrcox",
+                      title = "S4 MrCox"),
+  ncol = 5)
+```
+
+# ============================================================
+# S3: n=80, 10 groups (size=10), 60% zero  [n < p, more sparse]
+# ============================================================
+```{r s3-setup}
+n <- 80; p <- 100; r_true <- 2; k <- 4
+n_groups    <- 10
+zero_blocks <- c(1, 2, 3, 4, 5, 6)
+lv_3 <- seq(1e-2, 6e-1, length.out = 15)
+```
+
+```{r s3-data}
+set.seed(7)
+search_data_3 <- simulations_data(n, p, r_true, k,
+                                   n_simulations = 10,
+                                   n_groups      = n_groups,
+                                   zero_blocks   = zero_blocks,
+                                   store_dlong   = FALSE,
+                                   case          = 2,
+                                   group_corr    = 0.7)
+group_labels_3 <- search_data_3$group_labels
+rank_check(search_data_3$Beta_matrix)
+```
+
+```{r}
+plot_B_true_boxplot(search_data_3, group_labels = group_labels_2,title = "S3 & S4: True B — 10 groups, 60% zero")
+```
+
+
+```{r s3-fit}
+set.seed(7)
+sim_data3 <- simulations_data(n, p, r_true, k,
+                               n_simulations = 100,
+                               n_groups      = n_groups,
+                               zero_blocks   = zero_blocks,
+                               store_dlong   = FALSE,
+                               case          = 2,
+                               group_corr    = 0.7,
+                               beta_obj      = search_data_3)
+
+auto_grplasso_3 <- simulations_fit_auto_rank(
+  sim_data3, datas_cv = search_data_3, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_3,
+  group_labels = group_labels_3, method = "rrr_grplasso",
+  rank_vector = c(1, 2, 3), n_folds_cv = 5, rho = 0.1)
+
+auto_lasso_3 <- simulations_fit_auto_rank(
+  sim_data3, datas_cv = search_data_3, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_3,
+  method = "rrr_lasso", rank_vector = c(1, 2, 3),
+  n_folds_cv = 5, rho = 0.1)
+
+auto_ridge_3 <- simulations_fit_auto_rank(
+  sim_data3, datas_cv = search_data_3, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_3,
+  method = "rrr_ridge", rank_vector = c(1, 2, 3),
+  n_folds_cv = 5, rho = 0.1)
+
+auto_mrcox_3 <- simulations_fit_auto_rank(
+  sim_data3, datas_cv = search_data_3, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_3,
+  method = "mrcox", rank_vector = c(1, 2, 3),
+  n_folds_cv = 5, rho = 0.1)
+```
+
+```{r s3-results}
+print_rank_comparisons(
+  list(auto_grplasso_3, auto_lasso_3, auto_ridge_3, auto_mrcox_3),
+  c("rrr_grplasso", "rrr_lasso", "rrr_ridge", "mrcox"),
+  "S3: n=80, 10g, sz=10, 60% zero"
+)
+```
+
+```{r s3-lambda-plots, fig.width=10, fig.height=4}
+gridExtra::grid.arrange(
+  lambda_plot_by_rank(auto_grplasso_3, "rrr_grplasso",
+                      title = "S3 Group Lasso"),
+  lambda_plot_by_rank(auto_lasso_3,    "rrr_lasso",
+                      title = "S3 Lasso"),
+  lambda_plot_by_rank(auto_ridge_3,    "rrr_ridge",
+                      title = "S3 Ridge"),
+  lambda_plot_by_rank(auto_mrcox_3,    "mrcox",
+                      title = "S3 MrCox"),
+  ncol = 4)
+```
+
+# ============================================================
+# S4: n=300, 10 groups (size=10), 60% zero  [n > p, more sparse]
+# ============================================================
+```{r s4-setup}
+n <- 300; p <- 100; r_true <- 2; k <- 4
+n_groups    <- 10
+zero_blocks <- c(1, 2, 3, 4, 5, 6)
+lv_4        <- seq(1e-2, 6e-1, length.out = 15)
+lv_pen_4    <- seq(2e-3, 2e-2, length.out = 10)
+lv_mrcox_4  <- seq(2e-2, 2e-1, length.out = 10)
+```
+
+```{r s4-data}
+set.seed(7)
+search_data_4 <- simulations_data(n, p, r_true, k,
+                                   n_simulations = 10,
+                                   n_groups      = n_groups,
+                                   zero_blocks   = zero_blocks,
+                                   store_dlong   = TRUE,
+                                   case          = 2,
+                                   group_corr    = 0.7)
+group_labels_4 <- search_data_4$group_labels
+rank_check(search_data_4$Beta_matrix)
+```
+
+```{r s4-fit}
+set.seed(7)
+sim_data4 <- simulations_data(n, p, r_true, k,
+                               n_simulations = 100,
+                               n_groups      = n_groups,
+                               zero_blocks   = zero_blocks,
+                               store_dlong   = TRUE,
+                               case          = 2,
+                               group_corr    = 0.7,
+                               beta_obj      = search_data_4)
+
+auto_grplasso_4 <- simulations_fit_auto_rank(
+  sim_data4, datas_cv = search_data_4, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_4,
+  group_labels = group_labels_4, method = "rrr_grplasso",
+  rank_vector = c(1, 2, 3), n_folds_cv = 5)
+
+auto_lasso_4 <- simulations_fit_auto_rank(
+  sim_data4, datas_cv = search_data_4, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_4,
+  method = "rrr_lasso", rank_vector = c(1, 2, 3), n_folds_cv = 5)
+
+auto_ridge_4 <- simulations_fit_auto_rank(
+  sim_data4, datas_cv = search_data_4, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_4,
+  method = "rrr_ridge", rank_vector = c(1, 2, 3), n_folds_cv = 5)
+
+auto_pen_4 <- simulations_fit_auto_rank(
+  sim_data4, datas_cv = search_data_4, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_pen_4,
+  method = "pen", rank_vector = c(1, 2, 3), n_folds_cv = 5)
+
+auto_mrcox_4 <- simulations_fit_auto_rank(
+  sim_data4, datas_cv = search_data_4, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_mrcox_4,
+  method = "mrcox", rank_vector = c(1, 2, 3), n_folds_cv = 5)
+```
+
+```{r s4-results}
+print_rank_comparisons(
+  list(auto_grplasso_4, auto_lasso_4, auto_ridge_4, auto_pen_4, auto_mrcox_4),
+  c("rrr_grplasso", "rrr_lasso", "rrr_ridge", "pen", "mrcox"),
+  "S4: n=300, 10g, sz=10, 60% zero"
+)
+```
+
+```{r s4-lambda-plots, fig.width=13, fig.height=4}
+gridExtra::grid.arrange(
+  lambda_plot_by_rank(auto_grplasso_4, "rrr_grplasso",
+                      title = "S4 Group Lasso"),
+  lambda_plot_by_rank(auto_lasso_4,    "rrr_lasso",
+                      title = "S4 Lasso"),
+  lambda_plot_by_rank(auto_ridge_4,    "rrr_ridge",
+                      title = "S4 Ridge"),
+  lambda_plot_by_rank(auto_pen_4,      "pen",
+                      title = "S4 Pen"),
+  lambda_plot_by_rank(auto_mrcox_4,    "mrcox",
+                      title = "S4 MrCox"),
+  ncol = 5)
+```
+
+# ============================================================
+# S5: n=80, 20 groups (size=5), 40% zero  [n < p, more groups]
+# ============================================================
+```{r s5-setup}
+n <- 80; p <- 100; r_true <- 2; k <- 4
+n_groups    <- 20
+zero_blocks <- c(1, 2, 3, 4, 5, 6, 7, 8)   # 8 of 20 groups → 40% zero
+lv_5 <- seq(1e-2, 6e-1, length.out = 15)
+```
+
+```{r s5-data}
+set.seed(7)
+search_data_5 <- simulations_data(n, p, r_true, k,
+                                   n_simulations = 10,
+                                   n_groups      = n_groups,
+                                   zero_blocks   = zero_blocks,
+                                   store_dlong   = FALSE,
+                                   case          = 2,
+                                   group_corr    = 0.7)
+group_labels_5 <- search_data_5$group_labels
+rank_check(search_data_5$Beta_matrix)
+```
+
+```{r}
+plot_B_true_boxplot(search_data_5, group_labels = group_labels_5,title = "S5 & S6: True B — 20 groups, 40% zero")
+```
+
+```{r s5-fit}
+set.seed(7)
+sim_data5 <- simulations_data(n, p, r_true, k,
+                               n_simulations = 100,
+                               n_groups      = n_groups,
+                               zero_blocks   = zero_blocks,
+                               store_dlong   = FALSE,
+                               case          = 2,
+                               group_corr    = 0.7,
+                               beta_obj      = search_data_5)
+
+auto_grplasso_5 <- simulations_fit_auto_rank(
+  sim_data5, datas_cv = search_data_5, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_5,
+  group_labels = group_labels_5, method = "rrr_grplasso",
+  rank_vector = c(1, 2, 3), n_folds_cv = 5, rho = 0.1)
+
+auto_lasso_5 <- simulations_fit_auto_rank(
+  sim_data5, datas_cv = search_data_5, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_5,
+  method = "rrr_lasso", rank_vector = c(1, 2, 3),
+  n_folds_cv = 5, rho = 0.1)
+
+auto_ridge_5 <- simulations_fit_auto_rank(
+  sim_data5, datas_cv = search_data_5, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_5,
+  method = "rrr_ridge", rank_vector = c(1, 2, 3),
+  n_folds_cv = 5, rho = 0.1)
+
+auto_mrcox_5 <- simulations_fit_auto_rank(
+  sim_data5, datas_cv = search_data_5, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_5,
+  method = "mrcox", rank_vector = c(1, 2, 3),
+  n_folds_cv = 5, rho = 0.1)
+```
+
+```{r s5-results}
+print_rank_comparisons(
+  list(auto_grplasso_5, auto_lasso_5, auto_ridge_5, auto_mrcox_5),
+  c("rrr_grplasso", "rrr_lasso", "rrr_ridge", "mrcox"),
+  "S5: n=80, 20g, sz=5, 40% zero"
+)
+```
+
+```{r s5-lambda-plots, fig.width=10, fig.height=4}
+gridExtra::grid.arrange(
+  lambda_plot_by_rank(auto_grplasso_5, "rrr_grplasso",
+                      title = "S5 Group Lasso"),
+  lambda_plot_by_rank(auto_lasso_5,    "rrr_lasso",
+                      title = "S5 Lasso"),
+  lambda_plot_by_rank(auto_ridge_5,    "rrr_ridge",
+                      title = "S5 Ridge"),
+  lambda_plot_by_rank(auto_mrcox_5,    "mrcox",
+                      title = "S5 MrCox"),
+  ncol = 4)
+```
+
+# ============================================================
+# S6: n=300, 20 groups (size=5), 40% zero  [n > p, more groups]
+# ============================================================
+```{r s6-setup}
+n <- 300; p <- 100; r_true <- 2; k <- 4
+n_groups    <- 20
+zero_blocks <- c(1, 2, 3, 4, 5, 6, 7, 8)
+lv_6        <- seq(1e-2, 6e-1, length.out = 15)
+lv_pen_6    <- seq(2e-3, 2e-2, length.out = 10)
+lv_mrcox_6  <- seq(1e-2, 1e-1, length.out = 10)
+```
+
+```{r s6-data}
+set.seed(7)
+search_data_6 <- simulations_data(n, p, r_true, k,
+                                   n_simulations = 10,
+                                   n_groups      = n_groups,
+                                   zero_blocks   = zero_blocks,
+                                   store_dlong   = TRUE,
+                                   case          = 2,
+                                   group_corr    = 0.7)
+group_labels_6 <- search_data_6$group_labels
+rank_check(search_data_6$Beta_matrix)
+```
+
+```{r s6-fit}
+set.seed(7)
+sim_data6 <- simulations_data(n, p, r_true, k,
+                               n_simulations = 100,
+                               n_groups      = n_groups,
+                               zero_blocks   = zero_blocks,
+                               store_dlong   = TRUE,
+                               case          = 2,
+                               group_corr    = 0.7,
+                               beta_obj      = search_data_6)
+
+auto_grplasso_6 <- simulations_fit_auto_rank(
+  sim_data6, datas_cv = search_data_6, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_6,
+  group_labels = group_labels_6, method = "rrr_grplasso",
+  rank_vector = c(1, 2, 3), n_folds_cv = 5)
+
+auto_lasso_6 <- simulations_fit_auto_rank(
+  sim_data6, datas_cv = search_data_6, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_6,
+  method = "rrr_lasso", rank_vector = c(1, 2, 3), n_folds_cv = 5)
+
+auto_ridge_6 <- simulations_fit_auto_rank(
+  sim_data6, datas_cv = search_data_6, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_6,
+  method = "rrr_ridge", rank_vector = c(1, 2, 3), n_folds_cv = 5)
+
+auto_pen_6 <- simulations_fit_auto_rank(
+  sim_data6, datas_cv = search_data_6, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_pen_6,
+  method = "pen", rank_vector = c(1, 2, 3), n_folds_cv = 5)
+
+auto_mrcox_6 <- simulations_fit_auto_rank(
+  sim_data6, datas_cv = search_data_6, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_mrcox_6,
+  method = "mrcox", rank_vector = c(1, 2, 3), n_folds_cv = 5)
+```
+
+```{r s6-results}
+print_rank_comparisons(
+  list(auto_grplasso_6, auto_lasso_6, auto_ridge_6, auto_pen_6, auto_mrcox_6),
+  c("rrr_grplasso", "rrr_lasso", "rrr_ridge", "pen", "mrcox"),
+  "S6: n=300, 20g, sz=5, 40% zero"
+)
+```
+
+```{r s6-lambda-plots, fig.width=13, fig.height=4}
+gridExtra::grid.arrange(
+  lambda_plot_by_rank(auto_grplasso_6, "rrr_grplasso",
+                      title = "S6 Group Lasso"),
+  lambda_plot_by_rank(auto_lasso_6,    "rrr_lasso",
+                      title = "S6 Lasso"),
+  lambda_plot_by_rank(auto_ridge_6,    "rrr_ridge",
+                      title = "S6 Ridge"),
+  lambda_plot_by_rank(auto_pen_6,      "pen",
+                      title = "S6 Pen"),
+  lambda_plot_by_rank(auto_mrcox_6,    "mrcox",
+                      title = "S6 MrCox"),
+  ncol = 5)
+```
+
+# ============================================================
+# S7: n=80, 20 groups (size=5), 60% zero  [n < p, most sparse]
+# ============================================================
+```{r s7-setup}
+n <- 80; p <- 100; r_true <- 2; k <- 4
+n_groups    <- 20
+zero_blocks <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)  # 12/20 → 60%
+lv_7 <- seq(1e-2, 6e-1, length.out = 15)
+```
+
+```{r s7-data}
+set.seed(7)
+search_data_7 <- simulations_data(n, p, r_true, k,
+                                   n_simulations = 10,
+                                   n_groups      = n_groups,
+                                   zero_blocks   = zero_blocks,
+                                   store_dlong   = FALSE,
+                                   case          = 2,
+                                   group_corr    = 0.7)
+group_labels_7 <- search_data_7$group_labels
+rank_check(search_data_7$Beta_matrix)
+```
+
+```{r}
+plot_B_true_boxplot(search_data_7, group_labels = group_labels_7,title = "S7 & S8: True B — 20 groups, 60% zero")
+```
+
+```{r s7-fit}
+set.seed(7)
+sim_data7 <- simulations_data(n, p, r_true, k,
+                               n_simulations = 100,
+                               n_groups      = n_groups,
+                               zero_blocks   = zero_blocks,
+                               store_dlong   = FALSE,
+                               case          = 2,
+                               group_corr    = 0.7,
+                               beta_obj      = search_data_7)
+
+auto_grplasso_7 <- simulations_fit_auto_rank(
+  sim_data7, datas_cv = search_data_7, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_7,
+  group_labels = group_labels_7, method = "rrr_grplasso",
+  rank_vector = c(1, 2, 3), n_folds_cv = 5, rho = 0.1)
+
+auto_lasso_7 <- simulations_fit_auto_rank(
+  sim_data7, datas_cv = search_data_7, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_7,
+  method = "rrr_lasso", rank_vector = c(1, 2, 3),
+  n_folds_cv = 5, rho = 0.1)
+
+auto_ridge_7 <- simulations_fit_auto_rank(
+  sim_data7, datas_cv = search_data_7, p = p, k = k,
+  n_simulations = 100, lambda_vector = seq(1e-2, 8e-1, length.out = 15),
+  method = "rrr_ridge", rank_vector = c(1, 2, 3),
+  n_folds_cv = 5, rho = 0.1)
+
+auto_mrcox_7 <- simulations_fit_auto_rank(
+  sim_data7, datas_cv = search_data_7, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_7,
+  method = "mrcox", rank_vector = c(1, 2, 3),
+  n_folds_cv = 5, rho = 0.1)
+```
+
+```{r s7-results}
+print_rank_comparisons(
+  list(auto_grplasso_7, auto_lasso_7, auto_ridge_7, auto_mrcox_7),
+  c("rrr_grplasso", "rrr_lasso", "rrr_ridge", "mrcox"),
+  "S7: n=80, 20g, sz=5, 60% zero"
+)
+```
+
+```{r s7-lambda-plots, fig.width=10, fig.height=4}
+gridExtra::grid.arrange(
+  lambda_plot_by_rank(auto_grplasso_7, "rrr_grplasso",
+                      title = "S7 Group Lasso"),
+  lambda_plot_by_rank(auto_lasso_7,    "rrr_lasso",
+                      title = "S7 Lasso"),
+  lambda_plot_by_rank(auto_ridge_7,    "rrr_ridge",
+                      title = "S7 Ridge"),
+  lambda_plot_by_rank(auto_mrcox_7,    "mrcox",
+                      title = "S7 MrCox"),
+  ncol = 3)
+```
+
+# ============================================================
+# S8: n=300, 20 groups (size=5), 60% zero  [n > p, most sparse]
+# ============================================================
+```{r s8-setup}
+n <- 300; p <- 100; r_true <- 2; k <- 4
+n_groups    <- 20
+zero_blocks <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+lv_8        <- seq(1e-2, 6e-1, length.out = 15)
+lv_pen_8    <- seq(2e-3, 2e-2, length.out = 10)
+lv_mrcox_8  <- seq(1e-2, 1e-1, length.out = 10)
+```
+
+```{r s8-data}
+set.seed(7)
+search_data_8 <- simulations_data(n, p, r_true, k,
+                                   n_simulations = 10,
+                                   n_groups      = n_groups,
+                                   zero_blocks   = zero_blocks,
+                                   store_dlong   = TRUE,
+                                   case          = 2,
+                                   group_corr    = 0.7)
+group_labels_8 <- search_data_8$group_labels
+rank_check(search_data_8$Beta_matrix)
+```
+
+```{r s8-fit}
+set.seed(7)
+sim_data8 <- simulations_data(n, p, r_true, k,
+                               n_simulations = 100,
+                               n_groups      = n_groups,
+                               zero_blocks   = zero_blocks,
+                               store_dlong   = TRUE,
+                               case          = 2,
+                               group_corr    = 0.7,
+                               beta_obj      = search_data_8)
+
+auto_grplasso_8 <- simulations_fit_auto_rank(
+  sim_data8, datas_cv = search_data_8, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_8,
+  group_labels = group_labels_8, method = "rrr_grplasso",
+  rank_vector = c(1, 2, 3), n_folds_cv = 5)
+
+auto_lasso_8 <- simulations_fit_auto_rank(
+  sim_data8, datas_cv = search_data_8, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_8,
+  method = "rrr_lasso", rank_vector = c(1, 2, 3), n_folds_cv = 5)
+
+auto_ridge_8 <- simulations_fit_auto_rank(
+  sim_data8, datas_cv = search_data_8, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_8,
+  method = "rrr_ridge", rank_vector = c(1, 2, 3), n_folds_cv = 5)
+
+auto_pen_8 <- simulations_fit_auto_rank(
+  sim_data8, datas_cv = search_data_8, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_pen_8,
+  method = "pen", rank_vector = c(1, 2, 3), n_folds_cv = 5)
+
+auto_mrcox_8 <- simulations_fit_auto_rank(
+  sim_data8, datas_cv = search_data_8, p = p, k = k,
+  n_simulations = 100, lambda_vector = lv_mrcox_8,
+  method = "mrcox", rank_vector = c(1, 2, 3), n_folds_cv = 5)
+```
+
+```{r s8-results}
+print_rank_comparisons(
+  list(auto_grplasso_8, auto_lasso_8, auto_ridge_8, auto_pen_8, auto_mrcox_8),
+  c("rrr_grplasso", "rrr_lasso", "rrr_ridge", "pen", "mrcox"),
+  "S8: n=300, 20g, sz=5, 60% zero"
+)
+```
+
+```{r s8-lambda-plots, fig.width=13, fig.height=4}
+gridExtra::grid.arrange(
+  lambda_plot_by_rank(auto_grplasso_8, "rrr_grplasso",
+                      title = "S8 Group Lasso"),
+  lambda_plot_by_rank(auto_lasso_8,    "rrr_lasso",
+                      title = "S8 Lasso"),
+  lambda_plot_by_rank(auto_ridge_8,    "rrr_ridge",
+                      title = "S8 Ridge"),
+  lambda_plot_by_rank(auto_pen_8,      "pen",
+                      title = "S8 Pen"),
+  lambda_plot_by_rank(auto_mrcox_8,    "mrcox",
+                      title = "S8 MrCox"),
+  ncol = 5)
+```
+
+# ============================================================
+# Summary — best-rank results across all scenarios
+# ============================================================
+```{r summary-build}
+# Helper: extract best-rank row, inserting NA for missing methods
+add_missing_methods <- function(comp, all_methods) {
+  for (m in all_methods) {
+    if (!m %in% comp$method)
+      comp <- rbind(comp,
+                    data.frame(method = m, best_rank = NA,
+                               mean_bias = NA, mean_mse = NA,
+                               mean_corr = NA))
+  }
+  comp
+}
+
+all_methods <- c("rrr_grplasso", "rrr_lasso", "rrr_ridge", "pen", "mrcox")
+
+# Helper: wrap comparison_best_rank and fill in any missing methods
+best_comp <- function(...) {
+  fits    <- list(...)
+  methods <- sapply(fits, function(x) x$all_results[[1]]$performance$method[1],
+                    USE.NAMES = FALSE)
+  # fallback: pass method names explicitly via a named list
+  add_missing_methods(
+    comparison_best_rank(fits, names(list(...))),
+    all_methods)
+}
+
+# Build scenario table
+# (fix: best_rank must stay integer → convert AFTER rbind)
+make_row <- function(scenario_label, n_val, n_groups_val, zero_pct_val,
+                     auto_grp, auto_las, auto_rid = NULL,
+                     auto_pen = NULL, auto_mrc) {
+  fits    <- Filter(Negate(is.null),
+                    list(auto_grp, auto_las, auto_rid, auto_pen, auto_mrc))
+  mnames  <- Filter(Negate(is.null),
+                    list(
+                      if (!is.null(auto_grp)) "rrr_grplasso",
+                      if (!is.null(auto_las)) "rrr_lasso",
+                      if (!is.null(auto_rid)) "rrr_ridge",
+                      if (!is.null(auto_pen)) "pen",
+                      if (!is.null(auto_mrc)) "mrcox"))
+  comp    <- comparison_best_rank(fits, unlist(mnames))
+  comp    <- add_missing_methods(comp, all_methods)
+  cbind(scenario   = scenario_label,
+        n          = n_val,
+        n_groups   = n_groups_val,
+        zero_pct   = zero_pct_val,
+        comp,
+        stringsAsFactors = FALSE)
+}
+
+all_comparison <- rbind(
+  make_row("S1: n=80,  10g, sz=10, 40%",  80,  10, "40%",
+           auto_grplasso_1, auto_lasso_1, auto_ridge_1,         NULL,       auto_mrcox_1),
+  make_row("S2: n=300, 10g, sz=10, 40%", 300,  10, "40%",
+           auto_grplasso_2, auto_lasso_2, auto_ridge_2, auto_pen_2, auto_mrcox_2),
+  make_row("S3: n=80,  10g, sz=10, 60%",  80,  10, "60%",
+           auto_grplasso_3, auto_lasso_3, auto_ridge_3,         NULL,       auto_mrcox_3),
+  make_row("S4: n=300, 10g, sz=10, 60%", 300,  10, "60%",
+           auto_grplasso_4, auto_lasso_4, auto_ridge_4, auto_pen_4, auto_mrcox_4),
+  make_row("S5: n=80,  20g, sz=5,  40%",  80,  20, "40%",
+           auto_grplasso_5, auto_lasso_5, auto_ridge_5,         NULL,       auto_mrcox_5),
+  make_row("S6: n=300, 20g, sz=5,  40%", 300,  20, "40%",
+           auto_grplasso_6, auto_lasso_6, auto_ridge_6, auto_pen_6, auto_mrcox_6),
+  make_row("S7: n=80,  20g, sz=5,  60%",  80,  20, "60%",
+           auto_grplasso_7, auto_lasso_7, auto_ridge_7,         NULL,       auto_mrcox_7),
+  make_row("S8: n=300, 20g, sz=5,  60%", 300,  20, "60%",
+           auto_grplasso_8, auto_lasso_8, auto_ridge_8, auto_pen_8, auto_mrcox_8)
+) %>%
+  mutate(
+    across(c(n, n_groups, mean_mse, mean_bias, mean_corr), as.numeric),
+    best_rank    = as.integer(best_rank),           # ← keep as integer
+    method_label = dplyr::case_when(
+      method == "rrr_grplasso" ~ "Group Lasso",
+      method == "rrr_lasso"   ~ "Lasso",
+      method == "rrr_ridge"   ~ "Ridge",
+      method == "pen"         ~ "Pen",
+      method == "mrcox"       ~ "MrCox",
+      TRUE                    ~ method),
+    method_label = factor(method_label,
+                          levels = c("Group Lasso", "Lasso",
+                                     "Ridge", "Pen", "MrCox"))
+  )
+rownames(all_comparison) <- NULL
+```
+
+```{r summary-table}
+all_comparison %>%
+  select(scenario, method_label, best_rank, mean_mse, mean_bias, mean_corr) %>%
+  arrange(scenario, method_label) %>%
+  mutate(across(c(mean_mse, mean_bias, mean_corr), ~ round(.x, 4))) %>%
+  print(n = Inf)
+```
+
+```{r summary-barplot, fig.width=11, fig.height=5}
+colors5 <- c("Group Lasso" = "steelblue", "Lasso"  = "tomato",
+             "Ridge"       = "darkorange", "Pen"   = "darkgreen",
+             "MrCox"       = "purple")
+
+scenario_order <- all_comparison %>%
+  filter(method == "rrr_grplasso") %>%
+  arrange(desc(mean_mse)) %>%
+  pull(scenario)
+
+all_comparison <- all_comparison %>%
+  mutate(scenario = factor(scenario, levels = scenario_order))
+
+p_mse <- ggplot(all_comparison,
+                aes(x = scenario, y = mean_mse, fill = method_label)) +
+  geom_bar(stat = "identity",
+           position = position_dodge(width = 0.8),
+           alpha = 0.88, width = 0.75, na.rm = TRUE) +
+  scale_fill_manual(values = colors5, name = "Method") +
+  scale_y_continuous(labels = number_format(accuracy = 0.001)) +
+  labs(title    = "Mean MSE by scenario and method (at auto-selected rank)",
+       subtitle = "p=100, k=4, group_corr=0.7, fixed Beta\n(Pen/Ridge: n=300 only; Ridge: new addition)",
+       x = NULL, y = "Mean MSE") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x        = element_text(angle = 35, hjust = 1, size = 9),
+        legend.position    = "bottom",
+        panel.grid.major.x = element_blank())
+print(p_mse)
+```
+
+```{r summary-lineplot, fig.width=11, fig.height=7}
+p_line <- all_comparison %>%
+  mutate(
+    group_size  = 100 / n_groups,
+    facet_label = paste0(n_groups, " groups (sz=", group_size, "), ",
+                         zero_pct, " zero"),
+    facet_label = factor(facet_label,
+                         levels = c("10 groups (sz=10), 40% zero",
+                                    "10 groups (sz=10), 60% zero",
+                                    "20 groups (sz=5), 40% zero",
+                                    "20 groups (sz=5), 60% zero"))
+  ) %>%
+  ggplot(aes(x = factor(n), y = mean_mse,
+             color = method_label, group = method_label,
+             shape = method_label)) +
+  geom_line(linewidth = 0.9, na.rm = TRUE) +
+  geom_point(size = 3, na.rm = TRUE) +
+  facet_wrap(~facet_label, nrow = 2, scales = "free_y") +
+  scale_color_manual(values = colors5, name = "Method") +
+  scale_shape_manual(values = c("Group Lasso" = 16, "Lasso" = 17,
+                                 "Ridge" = 15, "Pen" = 8, "MrCox" = 18),
+                     name = "Method") +
+  labs(title    = "Mean MSE by sample size (at auto-selected rank)",
+       subtitle = "p=100, k=4, group_corr=0.7  |  Pen & Ridge: n=300 only",
+       x = "Sample size (n)", y = "Mean MSE") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom",
+        strip.text      = element_text(size = 10, face = "bold"),
+        panel.spacing   = unit(1.2, "lines"))
+print(p_line)
+```
+
+```{r summary-corrplot, fig.width=11, fig.height=5}
+# Mean correlation (higher = better)
+p_corr <- ggplot(all_comparison,
+                 aes(x = scenario, y = mean_corr, fill = method_label)) +
+  geom_bar(stat = "identity",
+           position = position_dodge(width = 0.8),
+           alpha = 0.88, width = 0.75, na.rm = TRUE) +
+  scale_fill_manual(values = colors5, name = "Method") +
+  scale_y_continuous(limits = c(0, 1),
+                     labels = number_format(accuracy = 0.01)) +
+  labs(title = "Mean correlation(B_hat, B_true) by scenario and method",
+       x = NULL, y = "Mean correlation") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x        = element_text(angle = 35, hjust = 1, size = 9),
+        legend.position    = "bottom",
+        panel.grid.major.x = element_blank())
+print(p_corr)
+```
+
+# ============================================================
+# Beta heatmaps — Group Lasso best-rank estimates vs truth
+# ============================================================
+```{r heatmaps, fig.width=9, fig.height=4}
+minb <- 0; maxb <- 2
+
+compare_beta_heatmap("S1: n=80,  10g, 40%", sim_data1, auto_grplasso_1$best_perf, minb, maxb)
+compare_beta_heatmap("S2: n=300, 10g, 40%", sim_data2, auto_grplasso_2$best_perf, minb, maxb)
+
+```
+
