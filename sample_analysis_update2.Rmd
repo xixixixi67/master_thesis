@@ -38,8 +38,8 @@ rho_w <- 0.7    # within-group correlation for KMS Toeplitz on alpha
 rho_b <- 0.1    # between-group correlation for KMS Toeplitz on alpha
 rho_w_k <- 0.7    # within-group correlation for KMS Toeplitz on Gamma
 rho_b_k <- 0.1    # between-group correlation for KMS Toeplitz on Gamma
-mu_l <- 0.5    # lower bound for group mean (active groups)
-mu_u  <- 1.5   # upper bound for group mean (active groups)
+mu_l <- 0.2    # lower bound for group mean (active groups)
+mu_u  <- 1.0   # upper bound for group mean (active groups)
 use_kms_beta <- TRUE  # use KMS covariance for A_matrix columns
 ```
 
@@ -52,9 +52,12 @@ n <- 300; p <- 20; r_true <- 2; k <- 4
 
 set.seed(7)
 sim_data0 <- simulations_data(n, p, r_true, k,
-                               case = 1,
-                               n_simulations = 100,
-                               store_dlong = TRUE)
+                              case = 1,
+                              n_simulations = 100,
+                              target_sd = 1,
+                              target_event_rate = 0.6,
+                              store_dlong = TRUE)
+
 generate_data_plots(sim_data0$dlong_list[[1]], n = n, r = r_true, p = p, k = k)
 ```
 
@@ -109,43 +112,49 @@ print_rank_comparisons(
 ```{r s1-setup}
 n <- 80; p <- 100; r_true <- 2; k <- 4
 n_groups  <- 10
-zero_blocks <- c(1, 3, 5, 7)
-lv_1 <- seq(1e-2, 6e-1, length.out = 15)
+n_groups_k <- 2 
+zero_blocks <- c(1,3,5,7)
+lv_1 <- seq(1e-1, 5e-1, length.out = 11)
+lv_1_ridge <- seq(5e-1, 1.5, length.out = 11)
+lv_1_grplasso <- seq(1e-1, 8e-1, length.out = 11)
 ```
 
 ```{r s1-data}
 set.seed(7)
 search_data_1 <- simulations_data(n, p, r_true, k,
-                                   n_simulations = 10,
-                                   n_groups      = n_groups,
-                                   zero_blocks   = zero_blocks,
-                                   store_dlong   = FALSE,
-                                   case          = 2,
-                                   group_corr    = 0.7,
-                                  scale = 0.15)
+                                  n_simulations = 10,
+                                  case = 2,
+                                  target_sd = 1,
+                                  target_event_rate = 0.6,
+                                  n_groups = n_groups,
+                                  n_groups_k = n_groups_k,
+                                  zero_blocks = zero_blocks,
+                                  store_dlong = FALSE,
+                                  n_probe = 80)
 group_labels_1 <- search_data_1$group_labels
 rank_check(search_data_1$Beta_matrix)
 ```
 
 ```{r}
-plot_B_true_boxplot(search_data_1, group_labels = group_labels_1,title = "S1 & S2: True B — 10 groups, 40% zero")
+plot_B_true_boxplot(search_data_1, group_labels = group_labels_1,title = "S1: True B — 10 groups, 40% zero")
 ```
 
 ```{r s1-fit}
 set.seed(7)
 sim_data1 <- simulations_data(n, p, r_true, k,
                                n_simulations = 100,
-                               n_groups      = n_groups,
-                               zero_blocks   = zero_blocks,
-                               store_dlong   = FALSE,
-                               case          = 2,
-                               group_corr    = 0.7,
-                               beta_obj      = search_data_1,
-                              scale = 0.15)
+                               n_groups = n_groups,
+                               zero_blocks = zero_blocks,
+                               store_dlong = FALSE,
+                               case = 2,
+                               target_sd = 1,
+                               target_event_rate = 0.6,
+                               beta_obj = search_data_1,
+                               n_probe = 80)
 
 auto_grplasso_1 <- simulations_fit_auto_rank(
   sim_data1, datas_cv = search_data_1, p = p, k = k,
-  n_simulations = 100, lambda_vector = lv_1,
+  n_simulations = 100, lambda_vector = lv_1_grplasso,
   group_labels = group_labels_1, method = "rrr_grplasso",
   rank_vector = c(1, 2, 3), n_folds_cv = 5, rho = 0.1)
 
@@ -157,7 +166,7 @@ auto_lasso_1 <- simulations_fit_auto_rank(
 
 auto_ridge_1 <- simulations_fit_auto_rank(
   sim_data1, datas_cv = search_data_1, p = p, k = k,
-  n_simulations = 100, lambda_vector = lv_1,
+  n_simulations = 100, lambda_vector = lv_1_ridge,
   method = "rrr_ridge", rank_vector = c(1, 2, 3),
   n_folds_cv = 5, rho = 0.1)
 
@@ -166,6 +175,14 @@ auto_mrcox_1 <- simulations_fit_auto_rank(
   n_simulations = 100, lambda_vector = lv_1,
   method = "mrcox", rank_vector = c(1, 2, 3),
   n_folds_cv = 5, rho = 0.1)
+```
+
+```{r s1-results}
+print_rank_comparisons(
+  list(auto_grplasso_1, auto_lasso_1, auto_ridge_1, auto_mrcox_1),
+  c("rrr_grplasso", "rrr_lasso", "rrr_ridge", "mrcox"),
+  "S1: n=80, 10g, sz=10, 40% zero"
+)
 ```
 
 ```{r s1-results}
@@ -197,20 +214,24 @@ gridExtra::grid.arrange(
 n <- 300; p <- 100; r_true <- 2; k <- 4
 n_groups    <- 10
 zero_blocks <- c(1, 3, 5, 7)
-lv_2        <- seq(1e-2, 6e-1, length.out = 15)
+lv_2        <- seq(1e-1, 6e-1, length.out = 11)
 lv_pen_2    <- seq(2e-3, 2e-2, length.out = 10)
-lv_mrcox_2  <- seq(1e-2, 1e-1, length.out = 10)
+lv_lasso_2  <- seq(1e-2, 2e-1, length.out = 11)
 ```
 
 ```{r s2-data}
 set.seed(7)
 search_data_2 <- simulations_data(n, p, r_true, k,
-                                   n_simulations = 10,
-                                   n_groups      = n_groups,
-                                   zero_blocks   = zero_blocks,
-                                   store_dlong   = TRUE,
-                                   case          = 2,
-                                   group_corr    = 0.7)
+                                  n_simulations = 10,
+                                  target_sd = 1,
+                                  target_event_rate = 0.6,
+                                  n_groups = n_groups,
+                                  n_groups_k = n_groups_k,
+                                  zero_blocks = zero_blocks,
+                                  store_dlong = TRUE,
+                                  case = 2,
+                                  n_probe = 300
+                                  )
 group_labels_2 <- search_data_2$group_labels
 rank_check(search_data_2$Beta_matrix)
 ```
@@ -218,13 +239,17 @@ rank_check(search_data_2$Beta_matrix)
 ```{r s2-fit}
 set.seed(7)
 sim_data2 <- simulations_data(n, p, r_true, k,
-                               n_simulations = 100,
-                               n_groups      = n_groups,
-                               zero_blocks   = zero_blocks,
-                               store_dlong   = TRUE,
-                               case          = 2,
-                               group_corr    = 0.7,
-                               beta_obj      = search_data_2)
+                              n_simulations = 100,
+                              target_sd = 1,
+                              target_event_rate = 0.6,
+                              n_groups = n_groups,
+                              n_groups_k = n_groups_k,
+                              zero_blocks = zero_blocks,
+                              store_dlong = TRUE,
+                              case = 2,
+                              n_probe = 300,
+                              beta_obj = search_data_2
+                              )
 
 auto_grplasso_2 <- simulations_fit_auto_rank(
   sim_data2, datas_cv = search_data_2, p = p, k = k,
@@ -234,7 +259,7 @@ auto_grplasso_2 <- simulations_fit_auto_rank(
 
 auto_lasso_2 <- simulations_fit_auto_rank(
   sim_data2, datas_cv = search_data_2, p = p, k = k,
-  n_simulations = 100, lambda_vector = lv_2,
+  n_simulations = 100, lambda_vector = lv_lasso_2,
   method = "rrr_lasso", rank_vector = c(1, 2, 3), n_folds_cv = 5)
 
 auto_ridge_2 <- simulations_fit_auto_rank(
@@ -249,7 +274,7 @@ auto_pen_2 <- simulations_fit_auto_rank(
 
 auto_mrcox_2 <- simulations_fit_auto_rank(
   sim_data2, datas_cv = search_data_2, p = p, k = k,
-  n_simulations = 100, lambda_vector = lv_mrcox_2,
+  n_simulations = 100, lambda_vector = lv_2,
   method = "mrcox", rank_vector = c(1, 2, 3), n_folds_cv = 5)
 ```
 
@@ -271,8 +296,8 @@ gridExtra::grid.arrange(
                       title = "S2 Ridge"),
   lambda_plot_by_rank(auto_pen_2,      "pen",
                       title = "S2 Pen"),
-  lambda_plot_by_rank(auto_mrcox_4,    "mrcox",
-                      title = "S4 MrCox"),
+  lambda_plot_by_rank(auto_mrcox_2,    "mrcox",
+                      title = "S2 MrCox"),
   ncol = 5)
 ```
 
@@ -283,41 +308,50 @@ gridExtra::grid.arrange(
 n <- 80; p <- 100; r_true <- 2; k <- 4
 n_groups    <- 10
 zero_blocks <- c(1, 2, 3, 4, 5, 6)
-lv_3 <- seq(1e-2, 6e-1, length.out = 15)
+lv_3 <- seq(1e-2, 6e-1, length.out = 11)
+lv_3_ridge <- seq(5e-1, 1.5, length.out = 11)
+lv_3_grplasso <- seq(1e-1, 8e-1, length.out = 11)
 ```
 
 ```{r s3-data}
-set.seed(7)
+set.seed(42)
 search_data_3 <- simulations_data(n, p, r_true, k,
-                                   n_simulations = 10,
-                                   n_groups      = n_groups,
-                                   zero_blocks   = zero_blocks,
-                                   store_dlong   = FALSE,
-                                   case          = 2,
-                                   group_corr    = 0.7)
+                                  n_simulations = 10,
+                                  case = 2,
+                                  target_sd = 1,
+                                  target_event_rate = 0.6,
+                                  n_groups = n_groups,
+                                  n_groups_k = n_groups_k,
+                                  zero_blocks = zero_blocks,
+                                  store_dlong = FALSE,
+                                  n_probe = 80)
+
 group_labels_3 <- search_data_3$group_labels
 rank_check(search_data_3$Beta_matrix)
 ```
 
 ```{r}
-plot_B_true_boxplot(search_data_3, group_labels = group_labels_2,title = "S3 & S4: True B — 10 groups, 60% zero")
+plot_B_true_boxplot(search_data_3, group_labels = group_labels_2,title = "S3: True B — 10 groups, 60% zero")
 ```
 
 
 ```{r s3-fit}
-set.seed(7)
+set.seed(42)
 sim_data3 <- simulations_data(n, p, r_true, k,
-                               n_simulations = 100,
-                               n_groups      = n_groups,
-                               zero_blocks   = zero_blocks,
-                               store_dlong   = FALSE,
-                               case          = 2,
-                               group_corr    = 0.7,
-                               beta_obj      = search_data_3)
+                                  n_simulations = 100,
+                                  case = 2,
+                                  target_sd = 1,
+                                  target_event_rate = 0.6,
+                                  n_groups = n_groups,
+                                  n_groups_k = n_groups_k,
+                                  zero_blocks = zero_blocks,
+                                  store_dlong = FALSE,
+                                  n_probe = 80,
+                                  beta_obj = search_data_3)
 
 auto_grplasso_3 <- simulations_fit_auto_rank(
   sim_data3, datas_cv = search_data_3, p = p, k = k,
-  n_simulations = 100, lambda_vector = lv_3,
+  n_simulations = 100, lambda_vector = lv_3_grplasso,
   group_labels = group_labels_3, method = "rrr_grplasso",
   rank_vector = c(1, 2, 3), n_folds_cv = 5, rho = 0.1)
 
@@ -329,7 +363,7 @@ auto_lasso_3 <- simulations_fit_auto_rank(
 
 auto_ridge_3 <- simulations_fit_auto_rank(
   sim_data3, datas_cv = search_data_3, p = p, k = k,
-  n_simulations = 100, lambda_vector = lv_3,
+  n_simulations = 100, lambda_vector = lv_3_ridge,
   method = "rrr_ridge", rank_vector = c(1, 2, 3),
   n_folds_cv = 5, rho = 0.1)
 
@@ -460,12 +494,15 @@ lv_5 <- seq(1e-2, 6e-1, length.out = 15)
 ```{r s5-data}
 set.seed(7)
 search_data_5 <- simulations_data(n, p, r_true, k,
-                                   n_simulations = 10,
-                                   n_groups      = n_groups,
-                                   zero_blocks   = zero_blocks,
-                                   store_dlong   = FALSE,
-                                   case          = 2,
-                                   group_corr    = 0.7)
+                                  n_simulations = 10,
+                                  case = 2,
+                                  target_sd = 1,
+                                  target_event_rate = 0.6,
+                                  n_groups = n_groups,
+                                  n_groups_k = n_groups_k,
+                                  zero_blocks = zero_blocks,
+                                  store_dlong = FALSE,
+                                  n_probe = 80)
 group_labels_5 <- search_data_5$group_labels
 rank_check(search_data_5$Beta_matrix)
 ```
@@ -477,13 +514,16 @@ plot_B_true_boxplot(search_data_5, group_labels = group_labels_5,title = "S5 & S
 ```{r s5-fit}
 set.seed(7)
 sim_data5 <- simulations_data(n, p, r_true, k,
-                               n_simulations = 100,
-                               n_groups      = n_groups,
-                               zero_blocks   = zero_blocks,
-                               store_dlong   = FALSE,
-                               case          = 2,
-                               group_corr    = 0.7,
-                               beta_obj      = search_data_5)
+                                  n_simulations = 100,
+                                  case = 2,
+                                  target_sd = 1,
+                                  target_event_rate = 0.6,
+                                  n_groups = n_groups,
+                                  n_groups_k = n_groups_k,
+                                  zero_blocks = zero_blocks,
+                                  store_dlong = FALSE,
+                                  n_probe = 80,
+                                  beta_obj = search_data_5)
 
 auto_grplasso_5 <- simulations_fit_auto_rank(
   sim_data5, datas_cv = search_data_5, p = p, k = k,
@@ -630,12 +670,15 @@ lv_7 <- seq(1e-2, 6e-1, length.out = 15)
 ```{r s7-data}
 set.seed(7)
 search_data_7 <- simulations_data(n, p, r_true, k,
-                                   n_simulations = 10,
-                                   n_groups      = n_groups,
-                                   zero_blocks   = zero_blocks,
-                                   store_dlong   = FALSE,
-                                   case          = 2,
-                                   group_corr    = 0.7)
+                                  n_simulations = 10,
+                                  case = 2,
+                                  target_sd = 1,
+                                  target_event_rate = 0.6,
+                                  n_groups = n_groups,
+                                  n_groups_k = n_groups_k,
+                                  zero_blocks = zero_blocks,
+                                  store_dlong = FALSE,
+                                  n_probe = 80)
 group_labels_7 <- search_data_7$group_labels
 rank_check(search_data_7$Beta_matrix)
 ```
@@ -647,13 +690,16 @@ plot_B_true_boxplot(search_data_7, group_labels = group_labels_7,title = "S7 & S
 ```{r s7-fit}
 set.seed(7)
 sim_data7 <- simulations_data(n, p, r_true, k,
-                               n_simulations = 100,
-                               n_groups      = n_groups,
-                               zero_blocks   = zero_blocks,
-                               store_dlong   = FALSE,
-                               case          = 2,
-                               group_corr    = 0.7,
-                               beta_obj      = search_data_7)
+                                  n_simulations = 100,
+                                  case = 2,
+                                  target_sd = 1,
+                                  target_event_rate = 0.6,
+                                  n_groups = n_groups,
+                                  n_groups_k = n_groups_k,
+                                  zero_blocks = zero_blocks,
+                                  store_dlong = FALSE,
+                                  n_probe = 80,
+                                  beta_obj= search_data_7)
 
 auto_grplasso_7 <- simulations_fit_auto_rank(
   sim_data7, datas_cv = search_data_7, p = p, k = k,
