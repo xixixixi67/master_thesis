@@ -2,16 +2,16 @@ library(glmnet)
 library(survival)
 
 solve_RR_GrpLasso <- function(X, y_list, status_list, R,
-                               lambda_alpha,
-                               group_labels,
-                               rho = 0.01,
-                               alpha0 = NULL,
-                               Gamma0 = NULL,
-                               noise_sd = 0.1,
-                               step_size = 0.01,
-                               max_iter = 500,
-                               tol = 1e-4,
-                               verbose = FALSE)
+                           lambda_alpha,group_labels,
+                           entry_list = NULL,
+                           rho = 0.01,
+                           alpha0 = NULL,
+                           Gamma0 = NULL,
+                           noise_sd = 0.1,
+                           step_size = 0.01,
+                           max_iter = 500,
+                           tol = 1e-4,
+                           verbose = FALSE)
 {
   if (!is.matrix(X)) {
     stop("X must be a matrix")
@@ -25,19 +25,18 @@ solve_RR_GrpLasso <- function(X, y_list, status_list, R,
   if (length(group_labels) != ncol(X)) {
     stop("group_labels must have length p (one entry per predictor)")
   }
-  
   K <- length(y_list)
   N <- nrow(X)
   p <- ncol(X)
   
-  # Ridge initialization: fit separate ridge Cox for each outcome
+  
   if (is.null(alpha0) || is.null(Gamma0)) {
     B0 <- matrix(0, p, K)
     for (k in 1:K) {
       fit_ridge <- glmnet(X,
                           Surv(y_list[[k]], status_list[[k]]),
                           family = "cox",
-                          alpha = 0,       # ridge
+                          alpha = 0,
                           lambda = rho)
       B0[, k] <- as.vector(coef(fit_ridge))
     }
@@ -54,107 +53,142 @@ solve_RR_GrpLasso <- function(X, y_list, status_list, R,
     
     alpha0_perturbed <- alpha_base + matrix(rnorm(p*R,0,noise_sd*scale_alpha), p, R)
     Gamma0_perturbed <- Gamma_base + matrix(rnorm(K*R,0,noise_sd*scale_Gamma), K, R)
-
+    
     if (is.null(alpha0)) alpha0 <- alpha0_perturbed   # p x R
     if (is.null(Gamma0)) Gamma0 <- Gamma0_perturbed   # K x R
   }
   
-  # Preprocess survival data for C++ 
   order_list <- vector("list", K)
+  order_list_entry <- vector("list", K)
   status_mat <- matrix(0.0, nrow = N, ncol = K)
-  rankmin    <- matrix(0L,  nrow = N, ncol = K)
-  rankmax    <- matrix(0L,  nrow = N, ncol = K)
+  rankmin_exit    <- matrix(0L,  nrow = N, ncol = K)
+  rankmax_exit    <- matrix(0L,  nrow = N, ncol = K)
+  rankmin_entry    <- matrix(0L,  nrow = N, ncol = K)
+  
+  exit_sorted_mat  <- matrix(0.0, nrow = N, ncol = K) 
+  entry_sorted_mat <- matrix(0.0, nrow = N, ncol = K)
+  
+  if (is.null(entry_list)) {
+    if (verbose) message("entry_list not provided. Assuming all entries at time 0.")
+    entry_list <- lapply(y_list, function(y) rep(0, length(y)))
+  }
   
   for (k in 1:K) {
     y <- y_list[[k]]
     s <- status_list[[k]]
-    o <- order(y)              
-    y_sorted <- y[o]
-    s_sorted <- s[o]
+    e <- entry_list[[k]]
+    o_exit <- order(y)
+    y_sorted <- y[o_exit]
+    s_sorted <- s[o_exit]
+    e_sorted_by_exit <- e[o_exit]
     
-    # restore original order from sorted
-    order_list[[k]] <- order(o) - 1L
+    order_list[[k]] <- order(o_exit) - 1L
     
-    # normalize status by number of events
     n_events <- sum(s_sorted)
     if (n_events == 0) stop(paste("Outcome", k, "has no events"))
     status_mat[, k] <- s_sorted / n_events
     
-    # tied events
-    rankmin[, k] <- rank(y_sorted, ties.method = "min") - 1L
-    rankmax[, k] <- rank(y_sorted, ties.method = "max") - 1L
+    rankmin_exit[, k] <- rank(y_sorted, ties.method = "min") - 1L
+    rankmax_exit[, k] <- rank(y_sorted, ties.method = "max") - 1L
+    
+    exit_sorted_mat[, k] <- y_sorted
+    entry_sorted_mat[, k] <- e_sorted_by_exit
+    
+    o_entry <- order(e_sorted_by_exit)
+    order_list_entry[[k]] <- order(o_entry) - 1L
+    e_double_sorted <- e_sorted_by_exit[o_entry]
+    rankmin_entry[, k] <- rank(e_double_sorted, ties.method = "min") - 1L
   }
   
-  if (ncol(alpha0) != R)  stop("alpha0 must have R columns")
-  if (nrow(alpha0) != p)  stop("alpha0 must have p rows")
-  if (ncol(Gamma0) != R)  stop("Gamma0 must have R columns")
-  if (nrow(Gamma0) != K)  stop("Gamma0 must have K rows")
+  if (ncol(alpha0) != R) stop("alpha0 must have R columns")
+  if (nrow(alpha0) != p) stop("alpha0 must have p rows")
+  if (ncol(Gamma0) != R) stop("Gamma0 must have R columns")
+  if (nrow(Gamma0) != K) stop("Gamma0 must have K rows")
   
-  # Call C++ optimizer
   result <- fit_RR_GrpLasso(
-    X              = X,
-    status         = status_mat,
-    rankmin        = rankmin,
-    rankmax        = rankmax,
-    order_list     = order_list,
-    alpha0         = alpha0,
-    Gamma0         = Gamma0,
+    X                = X,
+    status           = status_mat,
+    rankmin          = rankmin_exit,
+    rankmax          = rankmax_exit,
+    rankmin_entry    = rankmin_entry,
+    entry_sorted_mat = entry_sorted_mat,  
+    exit_sorted_mat  = exit_sorted_mat,
+    order_list       = order_list,
+    order_list_entry = order_list_entry,
+    alpha0           = alpha0,
+    Gamma0           = Gamma0,
     lambda_alpha_all = lambda_alpha,
-    group_labels   = as.integer(group_labels),
-    step_size      = step_size,
-    niter          = max_iter,
-    tol            = tol,
-    linesearch_beta = 0.5,
-    verbose        = verbose
+    group_labels     = as.integer(group_labels),
+    step_size        = step_size,
+    niter            = max_iter,
+    tol              = tol,
+    linesearch_beta  = 0.5,
+    verbose          = verbose
   )
   
-  result$call        <- match.call()
+  result$call         <- match.call()
   result$lambda_alpha <- lambda_alpha
-  result$R           <- R
-  result$dimensions  <- list(N = N, p = p, K = K, R = R)
+  result$dimensions   <- list(N = N, p = p, K = K, R = R)
   
-  class(result) <- "survRRR" # name can be changed
+  class(result) <- "survRRR_Grplasso"
   return(result)
 }
 
-
 # compute residuals
-get_residual_RR_GrpLasso <- function(X, y_list, status_list, alpha, Gamma)
+get_residual_RR_GrpLasso <- function(X, y_list, entry_list=NULL, status_list, alpha, Gamma)
 {
   K <- length(y_list)
   N <- nrow(X)
   p <- ncol(X)
   R <- ncol(alpha)
   
-  if (nrow(alpha) != p)  stop("alpha must be p x R")
-  if (nrow(Gamma) != K)  stop("Gamma must be K x R")
-  if (ncol(Gamma) != R)  stop("Gamma must have R columns")
+  if (nrow(alpha) != p) stop("alpha must be p x R")
+  if (nrow(Gamma) != K) stop("Gamma must be K x R")
+  if (ncol(Gamma) != R) stop("Gamma must have R columns")
   
   order_list <- vector("list", K)
+  order_list_entry <- vector("list", K)
   status_mat <- matrix(0.0, nrow = N, ncol = K)
-  rankmin    <- matrix(0L,  nrow = N, ncol = K)
-  rankmax    <- matrix(0L,  nrow = N, ncol = K)
+  rankmin_exit <- matrix(0L, nrow = N, ncol = K)
+  rankmax_exit <- matrix(0L, nrow = N, ncol = K)
+  rankmin_entry <- matrix(0L, nrow = N, ncol = K)
+  exit_sorted_mat <- matrix(0.0, nrow = N, ncol = K)
+  entry_sorted_mat <- matrix(0.0, nrow = N, ncol = K) 
+  
+  if (is.null(entry_list)) {
+    entry_list <- lapply(y_list, function(y) rep(0, length(y)))
+  }
   
   for (k in 1:K) {
     y <- y_list[[k]]
     s <- status_list[[k]]
-    o <- order(y)
-    y_sorted <- y[o]
-    s_sorted <- s[o]
-    order_list[[k]] <- order(o) - 1L
+    e <- entry_list[[k]]
+    o_exit <- order(y)
+    y_sorted <- y[o_exit]
+    s_sorted <- s[o_exit]
+    e_sorted_by_exit <- e[o_exit]
+    order_list[[k]] <- order(o_exit) - 1L
     n_events <- sum(s_sorted)
     if (n_events == 0) stop(paste("Outcome", k, "has no events"))
     status_mat[, k] <- s_sorted / n_events
-    rankmin[, k] <- rank(y_sorted, ties.method = "min") - 1L
-    rankmax[, k] <- rank(y_sorted, ties.method = "max") - 1L
+    rankmin_exit[, k] <- rank(y_sorted, ties.method = "min") - 1L
+    rankmax_exit[, k] <- rank(y_sorted, ties.method = "max") - 1L
+    exit_sorted_mat[, k] <- y_sorted 
+    entry_sorted_mat[, k] <- e_sorted_by_exit
+    o_entry <- order(e_sorted_by_exit)
+    order_list_entry[[k]] <- order(o_entry) - 1L
+    e_double_sorted <- e_sorted_by_exit[o_entry]
+    rankmin_entry[, k] <- rank(e_double_sorted, ties.method = "min") - 1L
   }
   
-  compute_residual_RR_GrpLasso(X, status_mat, rankmin, rankmax, order_list, alpha, Gamma)
+  compute_residual_RR_GrpLasso(X, status_mat, rankmin_exit, rankmax_exit, rankmin_entry, entry_sorted_mat, 
+                               exit_sorted_mat, order_list, order_list_entry, alpha, Gamma)
 }
 
 
+
 # Print method for survRRR objects
-print.survRRR_GrpLasso <- function(x, ...) {
+print.survRRR_Grplasso <- function(x, ...) {
   cat("Reduced Rank Multi-Outcome Cox Model\n")
   cat("=====================================\n\n")
   cat("Dimensions:\n")
@@ -174,7 +208,7 @@ print.survRRR_GrpLasso <- function(x, ...) {
 
 
 # Summary method for survRRR objects
-summary.survRRR_GrpLasso <- function(object, ...) {
+summary.survRRR_Grplasso <- function(object, ...) {
   print(object)
   cat("\nObjective Function Values:\n")
   print(summary(object$objective_values))
