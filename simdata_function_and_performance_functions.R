@@ -33,106 +33,139 @@ add_zeros <- function(matrix, percentage = 0.10) {
   return(matrix)
 }
 
+## Function to detrmine C_max (C~U(0,C_max))
+
+C_max <- function(T_vec, target_rate=0.6) {
+  
+  find_C_max <- function(cm) {
+    current_rate <- mean(pmax(1-T_vec/cm, 0))
+    return(current_rate - target_rate)
+  }
+  
+  lower_bound <- min(T_vec)
+  upper_bound <- max(T_vec)
+  
+  result <- uniroot(find_C_max, interval=c(lower_bound, upper_bound), extendInt="yes")
+  return(result$root)
+}
+
 ## Functions to simulated beta matrix
-simulate_Beta_matrix <- function(p, r, k, case = 1, scale = 1,
-                                 n_groups = NULL, zero_blocks = NULL,
-                                 n_groups_k = NULL,
-                                 rho_w = 0.7,   rho_b = 0.1,
-                                 rho_w_k = 0.7, rho_b_k = 0.1,
-                                 mu_l = 0.2,    mu_u = 1.0,
-                                 use_kms_beta  = TRUE,
-                                 use_kms_gamma = TRUE) {
+simulate_Beta_matrix <- function(
+    p, r, k, case = 2,
+    n_groups = NULL,
+    zero_blocks = NULL,
+    n_groups_k = NULL,
+    rho_w=0.7, rho_b=0.1,
+    rho_w_k=0.7, rho_b_k=0.1,
+    mu_l=0.2, mu_u=1.0,
+    use_kms_beta = TRUE,
+    use_kms_gamma = TRUE) {
+  
   
   make_kms_corr <- function(dim_total, n_g, pg, rho_w, rho_b) {
     Sigma <- matrix(rho_b, dim_total, dim_total)
+    
     for (g in seq_len(n_g)) {
-      idx <- ((g - 1) * pg + 1):(g * pg)
-      Sigma[idx, idx] <- toeplitz(
-        pmax(rho_w ^ ((0:(pg - 1)) / (pg - 1)), rep(rho_b, pg))
+      idx <- ((g-1L)*pg + 1L):(g*pg)
+      Sigma[idx,idx] <- toeplitz(
+        pmax(rho_w^((0:(pg - 1)) / (pg - 1)), rep(rho_b, pg))
       )
     }
-    D_inv <- diag(1 / sqrt(diag(Sigma)))
+    # scale
+    D_inv <- diag(1/sqrt(diag(Sigma)))
     D_inv %*% Sigma %*% D_inv
   }
   
-  sample_copula_col <- function(R_corr, mu_vec = NULL) {
-    d   <- nrow(R_corr)
-    z   <- MASS::mvrnorm(1, mu = rep(0, d), Sigma = R_corr)
-    u   <- pnorm(z)
-    if (!is.null(mu_vec))
-      u <- pmin(pmax(u + mu_vec - 0.5, 0), 1)
+  sample_copula_col <- function(R_corr, mu_vec=NULL) {
+    z <- MASS::mvrnorm(1, mu=rep(0, nrow(R_corr)), Sigma = R_corr)
+    u <- pnorm(z)
+    # control the magnitude of data
+    if (!is.null(mu_vec)) {u <- pmin(pmax(u+mu_vec-0.5, 0), 1)}
     u
   }
   
-  if (case == 1) {
+  
+  if (case==1) {
+    A_matrix <- matrix(runif(p*r,0,1), p, r)
+    Gamma_matrix <- matrix(runif(k*r,0,1), k, r)
     
-    A_matrix     <- matrix(runif(p * r, 0, 1), p, r)
-    Gamma_matrix <- matrix(runif(k * r, 0, 1), k, r)
+  } else if (case==2) {
     
-  } else if (case == 2) {
-    
-    if (is.null(n_groups) || p %% n_groups != 0)
+    if (is.null(n_groups) || p%%n_groups!=0) {
       stop(sprintf("p (%d) must be divisible by n_groups (%d)", p, n_groups))
-    p_g <- p / n_groups
-
-    zero_group_ids <- if (!is.null(zero_blocks)) sapply(zero_blocks, `[`, 1) else integer(0)
-    active_groups  <- setdiff(seq_len(n_groups), zero_group_ids)
+    }
     
+    p_g <- p/n_groups
+    zero_group_ids <- as.integer(zero_blocks)
+    active_groups <- setdiff(seq_len(n_groups), zero_group_ids)
+    
+    # alpha matrix
     if (use_kms_beta) {
       R_beta <- make_kms_corr(p, n_groups, p_g, rho_w, rho_b)
-
-      mus     <- numeric(n_groups)
+      mus <- numeric(n_groups)
       mus[active_groups] <- runif(length(active_groups), mu_l, mu_u)
-      mu_full <- rep(mus, each = p_g)  
+      mu_full <- rep(mus, each=p_g)
       
-      A_matrix <- matrix(NA, p, r)
+      A_matrix <- matrix(NA_real_, p, r)
       for (col in seq_len(r)) {
         a_col <- sample_copula_col(R_beta, mu_vec = mu_full)
-        zero_idx <- unlist(lapply(zero_group_ids,
-                                  function(g) ((g-1)*p_g + 1):(g*p_g)))
-        if (length(zero_idx)) a_col[zero_idx] <- 0
-        A_matrix[, col] <- a_col
+        if (length(zero_group_ids)) {
+          zero_rows <- unlist(lapply(zero_group_ids,
+                                     function(g) ((g - 1L) * p_g + 1L):(g * p_g)))
+          a_col[zero_rows] <- 0
+        }
+        A_matrix[,col] <- a_col
       }
-    } else {
-      A_matrix <- matrix(runif(p * r, 0, 1), p, r)
-      for (blk in zero_blocks) {
-        rows <- ((blk[1]-1)*p_g + 1):(blk[1]*p_g)
-        A_matrix[rows, ] <- 0
-      }
-    }
-    
-    if (!is.null(n_groups_k) && use_kms_gamma) {
-      if (k %% n_groups_k != 0)
-        stop(sprintf("k (%d) must be divisible by n_groups_k (%d)", k, n_groups_k))
-      k_g         <- k / n_groups_k
-      R_gamma     <- make_kms_corr(k, n_groups_k, k_g, rho_w_k, rho_b_k)
       
-      Gamma_matrix <- matrix(NA, k, r)
+    } else {
+      A_matrix <- matrix(runif(p*r,0,1), p, r)
+      for (g in zero_group_ids) {
+        rows <- ((g - 1L) * p_g + 1L):(g * p_g)
+        A_matrix[rows,] <- 0
+      }
+    }
+   
+    # Gamma matrix
+    if (!is.null(n_groups_k) && use_kms_gamma) {
+      if (k%%n_groups_k!=0) {
+        stop(sprintf("k (%d) must be divisible by n_groups_k (%d)", k, n_groups_k))
+      }
+      
+      k_g <- k/n_groups_k
+      R_gamma <- make_kms_corr(k, n_groups_k, k_g, rho_w_k, rho_b_k)
+      
+      Gamma_matrix <- matrix(NA_real_, k, r)
       for (col in seq_len(r)) {
-        Gamma_matrix[, col] <- sample_copula_col(R_gamma)     # ← Copula
+        Gamma_matrix[,col] <- sample_copula_col(R_gamma)
       }
     } else {
-      Gamma_matrix <- matrix(runif(k * r, 0, 1), k, r)
+      Gamma_matrix <- matrix(runif(k*r,0,1), k, r)
     }
     
-  } else if (case == 3) {
-    
-    A_matrix     <- add_zeros(matrix(runif(p * r, 0, 1), p, r), 0.10)
-    Gamma_matrix <- add_zeros(matrix(runif(k * r, 0, 1), k, r), 0.10)
-    
+  } else if (case==3) {
+    A_matrix <- add_zeros(matrix(runif(p*r,0,1), p, r), 0.10)
+    Gamma_matrix <- add_zeros(matrix(runif(k*r,0,1), k, r), 0.10)
+  } else {
+    stop("case must be 1, 2, or 3.")
   }
   
-  Beta_matrix <- A_matrix %*% t(Gamma_matrix)
+  # build Beta_raw
   
-  return(list(
-    Beta_matrix  = Beta_matrix * scale,
-    A_matrix     = A_matrix,
+  Beta_raw <- A_matrix %*% t(Gamma_matrix)
+  
+  scale_factors <- NULL
+  
+  list(
+    Beta_matrix = Beta_raw,
+    A_matrix = A_matrix,
     Gamma_matrix = Gamma_matrix,
-    group_size   = if (case == 2) p / n_groups              else NULL,
-    n_groups     = if (case == 2) n_groups                  else NULL,
+    scale_factors = scale_factors,
+    group_size = if (case == 2) p / n_groups                           else NULL,
+    n_groups = if (case == 2) n_groups                               else NULL,
     group_size_k = if (case == 2 && !is.null(n_groups_k)) k / n_groups_k else NULL,
-    n_groups_k   = if (case == 2) n_groups_k                else NULL
-  ))
+    n_groups_k = if (case == 2) n_groups_k                             else NULL
+  )
+
 }
 
 ## Function to generate group_labels
@@ -143,105 +176,165 @@ gen_group_labels <- function(p,n_groups) {
 
 ## Function to simulate survival data
 
-# X ~ N(0,1), T ~ Exp(exp(X %*% B)), C ~ Uniform(0,1)
+# X ~ with KMS, T ~ Exp(exp(X %*% B)), C ~ Uniform(0,c_max)
 # T_obs = min(T, C), delta = I(T <= C)
-simulate_data_model = function(Beta_matrix, n, corr=0, group_corr = 0, group_labels = NULL, 
-                               use_kms_X=TRUE, n_groups=NULL, rho_w=0.7, rho_b=0.1, Print_flug=FALSE){
+simulate_data_model = function(Beta_matrix,
+                               n,
+                               target_event_rate = 0.6,
+                               group_labels = NULL, 
+                               use_kms_X=TRUE,
+                               n_groups=NULL,
+                               rho_w=0.7, rho_b=0.1,
+                               Print_flug=FALSE) {
   p <- nrow(Beta_matrix)   
   k <- ncol(Beta_matrix)
   
-  # KMS Toeplitz
+  # -------------generate X-------------
+  # KMS
   if (use_kms_X && !is.null(n_groups)) {
     if (p %% n_groups != 0)
       stop(sprintf("p (%d) must be divisible by n_groups (%d)", p, n_groups))
-    p_g   <- p / n_groups
+    
+    p_g <- p / n_groups
     Sigma <- matrix(rho_b, p, p)  
+    
     for (g in seq_len(n_groups)) {
       idx <- ((g - 1) * p_g + 1):(g * p_g)
       
-      within <- toeplitz(
+      Sigma[idx,idx] <- toeplitz(
         pmax(rho_w^((0:(p_g - 1)) / (p_g - 1)), rep(rho_b, p_g))
       )
-      Sigma[idx, idx] <- within
     }
+    
     X <- MASS::mvrnorm(n, mu = rep(0, p), Sigma = Sigma)
     
     # only simple correlation within group
-  } else if (group_corr > 0 && !is.null(group_labels)) {
-    n_groups_old <- max(group_labels)
-    Sigma        <- diag(p)
-    for (g in seq_len(n_groups_old)) {
-      idx                 <- which(group_labels == g)
-      Sigma[idx, idx]     <- group_corr
-      diag(Sigma)[idx]    <- 1
-    }
-    X <- mvtnorm::rmvnorm(n, mean = rep(0, p), sigma = Sigma)
-    
-  } else if (corr > 0) {
-    sigma        <- matrix(corr, p, p)
-    diag(sigma)  <- 1
-    X <- mvtnorm::rmvnorm(n, mean = rep(0, p), sigma = sigma)
-    
   } else {
     X <- matrix(rnorm(n * p), nrow = n, ncol = p)
   }
   
-  eta <- X%*%Beta_matrix
-  exp_eta <- exp(eta)
-  exp_eta[exp_eta<=1e-300] <- 1e-300
   
-  #GENERATE T(times)
+  # -------------generate T(times)-------------
   # later: mean_age = 60 
   # Outcome times T from exp distribution
-  T_sim <- matrix(NA, nrow = n, ncol = k)
+  eta <- X %*% Beta_matrix
+  T_sim <- matrix(NA_real_, nrow = n, ncol = k)
   for (i in 1:k) {
-    T_sim[, i] <- rexp(n, rate =  exp(eta)[,i])
+    rate_i <- exp(eta[,i])
+    rate_i <- pmax(rate_i, 1e-300)
+    T_sim[, i] <- rexp(n, rate = rate_i)
   }
   
-  #GENERATE censoring 
-  #Random censoring time from Uniform distribution
-  C <- runif(n, min = 0, max = 1)
+  # -------------generate censoring------------- 
+  # keep the rate of censoring
+  c_max <- C_max(as.vector(T_sim),
+                 target_rate = target_event_rate)
   
-  #DETERMINE the observed time and censoring indicator
-  T_obs <- matrix(NA, nrow = n, ncol = k)
-  delta <- matrix(NA, nrow = n, ncol = k)
+  C <- runif(n, min = 0, max = c_max) # same censoring time for all outcomes
+  
+  # -------------determine the observed time & event indicator -------------
+  T_obs <- matrix(NA_real_, nrow = n, ncol = k)
+  delta <- matrix(NA_real_, nrow = n, ncol = k)
   
   for (i in 1:k) {
     T_obs[,i] <- pmin(T_sim[,i],C)
     delta[,i] <- as.integer(T_sim[,i]<=C)
   }
   
-  # Check the proportion of censored vs event occurrences
-  prop_censored <- sum(delta == 0)/n/k
-  prop_event <- sum(delta == 1)/n/k
-  # Output proportions 
+
+  # -------------Output proportions------------- 
   if (Print_flug) {
-    print(paste('Proportion of censoring',prop_censored))
-    print(paste('Proportion of events',prop_event))
+    actual_rate <- mean(delta)
+    per_outcome <- round(colMeans(delta), 4)
+    cat(sprintf(
+      "target event rate : %.3f\n",  target_event_rate))
+    cat(sprintf(
+      "actual event rate : %.3f  (per outcome: %s)\n",
+      actual_rate, paste(per_outcome, collapse = ", ")))
+    cat(sprintf(
+      "c_max             : %.6f\n", c_max))
+    cat(sprintf(
+      "sd(eta) per outcome: %s\n",
+      paste(round(apply(eta, 2, sd), 3), collapse = ", ")))
   }
+  
+  
   y_list <- lapply(1:k, function(i) T_obs[,i])
   status_list <- lapply(1:k, function(i) delta[,i])
+  entry_list <- lapply(1:k, function(i) rep(0.0,n))
   
-  #CREATE data frame
+  # CREATE data frame (wide)
   data <- data.frame(id = 1:n)
   for (i in 1:k) {
     data[[paste0("t", i)]] <- T_obs[, i]
     data[[paste0("d", i)]] <- delta[, i]
+    data[[paste0("e", i)]] <- rep(0.0,n)
   }
   # Add predictors 
   for (i in 1:p) {
     data[[paste0("x", i)]] <- X[, i]
   }
   
-  return (list(
-    y_list = y_list,
+  list(
+    y_list      = y_list,
     status_list = status_list,
-    X = X,
-    T_sim = T_sim,
-    T_obs = T_obs,
-    data = data
-  ))
+    entry_list  = entry_list,
+    X           = X,
+    eta         = eta,
+    T_sim       = T_sim,
+    T_obs       = T_obs,
+    delta       = delta,
+    c_max       = c_max,
+    data        = data
+  )
+  
 }
+
+## Functions to control the variance of the simulated Beta matrix
+normalize_Beta <- function(beta_obj,
+                           n_probe = 500,
+                           target_sd = 1, 
+                           n_groups = NULL,
+                           rho_w=0.7, rho_b=0.1,
+                           use_kms_X = TRUE) {
+  Beta <- beta_obj$Beta_matrix
+  p <- nrow(Beta)
+  k <- ncol(Beta)
+  
+  # generate X_probe
+  if (use_kms_X && !is.null(n_groups)) {
+    if (p %% n_groups != 0)
+      stop(sprintf("p (%d) must be divisible by n_groups (%d)", p, n_groups))
+    
+    p_g   <- p / n_groups
+    Sigma <- matrix(rho_b, p, p)
+    for (g in seq_len(n_groups)) {
+      idx          <- ((g - 1L) * p_g + 1L):(g * p_g)
+      Sigma[idx, idx] <- toeplitz(
+        pmax(rho_w^((0:(p_g - 1)) / (p_g - 1)), rep(rho_b, p_g))
+      )
+    }
+    X_probe <- MASS::mvrnorm(n_probe, mu = rep(0, p), Sigma = Sigma)
+    
+  } else {
+    X_probe <- matrix(rnorm(n_probe * p), nrow = n_probe, ncol = p)
+  }
+  
+  # normalize sd of eta to target_sd
+  eta_probe <- X_probe %*% Beta
+  sd_per_outcome <- apply(eta_probe, 2, sd)
+  scale_factors <- target_sd / sd_per_outcome
+  
+  # scaled Beta
+  # (as rotation variety of alpha and Gamma, we didn't scale those there)
+  Beta_scaled <- sweep(Beta, 2, scale_factors, `*`)
+  
+  beta_obj$Beta_matrix  <- Beta_scaled
+  beta_obj$scale_factors <- scale_factors
+  
+  beta_obj
+}
+
 
 
 ## initialization for "pen"
@@ -270,7 +363,7 @@ make_pen_gamma_init <- function(X, y_list, status_list, R, k,
 }
 
 ## Function to preprocess data to be ready to enter the redrank model
-build_dlong = function(data,k){
+build_dlong = function(data,k,entry_list=NULL){
   library(mstate)
   #subjects
   n <- nrow(data)
@@ -279,10 +372,17 @@ build_dlong = function(data,k){
   # Column names for survival times and event indicators
   tnames <- paste("t", 1:k, sep="")
   dnames <- paste("d", 1:k, sep="")
+  enames <- paste("e", 1:k, sep="")
+  
+  if (!is.null(entry_list)) {
+    tstart_vec <- c(t(matrix(unlist(entry_list), n, k)))
+  } else {
+    tstart_vec <- rep(0.0, n*k)
+  }
   # Create dlong
   dlong <- data.frame(
     id = rep(data$id, each = k),
-    Tstart = 0,
+    Tstart = tstart_vec,
     Tstop = c(t(matrix(unlist(c(data[, tnames])), n, k))),
     status = c(t(matrix(unlist(c(data[, dnames])), n, k))),
     from = 1,
@@ -309,11 +409,13 @@ build_dlong = function(data,k){
 fit_one_model <- function(X, y_list, status_list, dlong = NULL,
                           method = c("rrr_grplasso", "rrr_lasso", "rrr_ridge", "pen", "mrcox"),
                           r, lambda, group_labels = NULL,
+                          entry_list = NULL,
                           pen_gamma_start = NULL, ...) {
   method <- match.arg(method)
   
   if (method == "rrr_grplasso") {
     raw   <- solve_RR_GrpLasso(X=X, y_list=y_list,
+                               entry_list = entry_list,
                                status_list=status_list,
                                R=r, lambda_alpha=lambda,
                                group_labels=group_labels, ...)
@@ -323,6 +425,7 @@ fit_one_model <- function(X, y_list, status_list, dlong = NULL,
     
   } else if (method == "rrr_lasso") {
     raw   <- solve_RR_Lasso(X=X, y_list=y_list,
+                            entry_list = entry_list,
                             status_list=status_list,
                             R=r, lambda_alpha=lambda, ...)
     res   <- raw$result[[1]]
@@ -331,6 +434,7 @@ fit_one_model <- function(X, y_list, status_list, dlong = NULL,
     
   } else if (method == "rrr_ridge") {
     raw   <- solve_RR_Ridge(X=X, y_list=y_list,
+                            entry_list = entry_list,
                             status_list=status_list,
                             R=r, lambda_alpha=lambda, ...)
     res   <- raw$result[[1]]
@@ -353,7 +457,7 @@ fit_one_model <- function(X, y_list, status_list, dlong = NULL,
     }
     
     pred_names  <- grep("^x", names(dlong), value=TRUE)
-    formula_str <- paste("Surv(Tstop, status) ~",
+    formula_str <- paste("Surv(Tstart, Tstop, status) ~",
                          paste(pred_names, collapse=" + "))
     
     raw <- tryCatch({
@@ -366,7 +470,7 @@ fit_one_model <- function(X, y_list, status_list, dlong = NULL,
             Gamma.iter   = pen_gamma_start,
             lambda.alpha = lambda,
             lambda.gamma = lambda,
-            eps = 1e-3, maxit = 1e6, thresh = 1e-5,
+            eps = 1e-3, maxit = 1e6, thresh = 1e-4,
             standardize.opt = FALSE,
             alpha = 1, ...)
         ))
@@ -436,73 +540,112 @@ performance_model=function(B_hat, B_true, Print_flug=FALSE) {
 
 ## Function to simulate n_simulation datasets of given rank r
 simulations_data <- function(n, p, r, k, n_simulations,
-                             case = 1, scale = 1, corr = 0, group_corr = 0,
-                             n_groups = NULL, zero_blocks = NULL,
-                             store_dlong = FALSE, beta_obj = NULL,
-                             random_beta = FALSE) {
+                             case = 2, 
+                             target_event_rate = 0.6,
+                             target_sd = 1,
+                             n_probe = 500,
+                             n_groups = NULL,
+                             n_groups_k = NULL,
+                             zero_blocks = NULL,
+                             group_labels= NULL,
+                             store_dlong = FALSE, 
+                             beta_obj = NULL,
+                             rho_w = 0.7, rho_b = 0.1,
+                             rho_w_k = 0.7, rho_b_k = 0.1,
+                             mu_l = 0.2, mu_u = 1.0,
+                             use_kms_X = TRUE,
+                             use_kms_beta = TRUE,
+                             use_kms_gamma = TRUE) {
   
-  # shared-beta path: generate once (or use supplied beta_obj)
-  if (!random_beta) {
-    if (is.null(beta_obj))
-      beta_obj <- simulate_Beta_matrix(p, r, k, case = case, scale = scale,
-                                       n_groups = n_groups,
-                                       zero_blocks = zero_blocks)
-    fixed_Beta <- beta_obj$Beta_matrix
+  # shared-beta path
+  if (is.null(beta_obj)) {
+      beta_obj <- simulate_Beta_matrix(
+        p, r, k, case = case,
+        n_groups = n_groups,
+        zero_blocks = zero_blocks,
+        n_groups_k = n_groups_k,
+        rho_w = rho_w,
+        rho_b = rho_b,
+        rho_w_k = rho_w_k,
+        rho_b_k = rho_b_k,
+        use_kms_beta = use_kms_beta,
+        use_kms_gamma = use_kms_gamma
+      )}
+  # normalize Beta
+  beta_obj <- normalize_Beta(
+    beta_obj,
+    n_probe = n_probe,
+    target_sd = target_sd,
+    n_groups = n_groups,
+    rho_w = rho_w, rho_b = rho_b,
+    use_kms_X = use_kms_X
+  )
+  
+  fixed_Beta <- beta_obj$Beta_matrix
+  
+  group_labels_vec <- if (!is.null(group_labels)) {
+    group_labels
+  } else if (!is.null(n_groups)) {
+    gen_group_labels(p, n_groups)
+  } else {
+    NULL
   }
-  
-  group_labels_vec <- if (case == 2) gen_group_labels(p, n_groups) else NULL
   
   y_list_all <- status_list_all <- X_list <-
     T_sim_list <- T_obs_list <- data_wide_list <-
-    Beta_matrix_list <-                     
-    vector("list", n_simulations)
+    Beta_matrix_list <- vector("list", n_simulations)
+  
+  entry_list_all <- vector("list", n_simulations)
   dlong_list <- if (store_dlong) vector("list", n_simulations) else NULL
   
   for (i in seq_len(n_simulations)) {
+    Beta_i <- fixed_Beta
     
-    if (random_beta) {
-      beta_i   <- simulate_Beta_matrix(p, r, k, case = case, scale = scale,
-                                       n_groups = n_groups,
-                                       zero_blocks = zero_blocks)
-      Beta_i   <- beta_i$Beta_matrix
-    } else {
-      Beta_i   <- fixed_Beta
-    }
     Beta_matrix_list[[i]] <- Beta_i
     
-    sim <- simulate_data_model(Beta_i, n, corr = corr,
-                               group_corr = group_corr,
-                               group_labels = group_labels_vec)
+    sim <- simulate_data_model(
+      Beta_i, n,
+      target_event_rate = target_event_rate,
+      group_labels = group_labels_vec,
+      use_kms_X = use_kms_X,
+      n_groups = n_groups,
+      rho_w = rho_w,
+      rho_b = rho_b
+    )
+    
     y_list_all[[i]]      <- sim$y_list
     status_list_all[[i]] <- sim$status_list
+    entry_list_all[[i]]  <- sim$entry_list
     X_list[[i]]          <- sim$X
     T_sim_list[[i]]      <- sim$T_sim
     T_obs_list[[i]]      <- sim$T_obs
     data_wide_list[[i]]  <- sim$data
-    if (store_dlong) dlong_list[[i]] <- build_dlong(sim$data, k)
+    
+    if (store_dlong)
+      dlong_list[[i]] <- build_dlong(sim$data, k, entry_list=sim$entry_list)
   }
   
-  # for backward compatibility: Beta_matrix = first replicate's beta
   Beta_ref <- Beta_matrix_list[[1]]
-  A_ref    <- if (!random_beta) beta_obj$A_matrix    else NULL
-  G_ref    <- if (!random_beta) beta_obj$Gamma_matrix else NULL
+  A_ref    <- beta_obj$A_matrix
+  G_ref    <- beta_obj$Gamma_matrix
   
   return(list(
     y_list_all        = y_list_all,
     status_list_all   = status_list_all,
+    entry_list_all    = entry_list_all,
     X_list            = X_list,
-    Beta_matrix       = Beta_ref,  
-    Beta_matrix_list  = Beta_matrix_list, 
-    random_beta       = random_beta,
+    Beta_matrix       = Beta_ref,
+    Beta_matrix_list  = Beta_matrix_list,
     A_matrix          = A_ref,
     Gamma_matrix      = G_ref,
+    scale_factors     = beta_obj$scale_factors,
     T_sim_list        = T_sim_list,
     T_obs_list        = T_obs_list,
     data_wide_list    = data_wide_list,
     dlong_list        = dlong_list,
     group_labels      = group_labels_vec,
-    n_groups          = if (case == 2) n_groups       else NULL,
-    group_size        = if (case == 2) p / n_groups   else NULL
+    n_groups          = if (!is.null(n_groups)) n_groups else NULL,
+    group_size        = if (!is.null(n_groups)) p / n_groups else NULL
   ))
 }
 
@@ -510,15 +653,26 @@ simulations_data <- function(n, p, r, k, n_simulations,
 compute_vvh_fold <- function(X_train, X_test,
                              y_train, y_test,
                              s_train, s_test,
-                             B_hat) {
+                             B_hat,
+                             entry_list_tr = NULL,
+                             entry_list_te = NULL) {
   K <- ncol(B_hat)
   N_test <- nrow(X_test)
   X_full <- rbind(X_train, X_test)
   p <- ncol(X_train)
   pred_names <- paste0("xv", seq_len(p))
   
-  fml <- as.formula(
-    paste("survival::Surv(y, s) ~", paste(pred_names, collapse = "+")))
+  has_entry <- !is.null(entry_list_tr) &&
+               any(unlist(entry_list_tr)!=0)
+  if (has_entry) {
+    fml <- as.formula(
+      paste("survival::Surv(entry, y, s) ~",
+            paste(pred_names, collapse = "+")))
+  } else {
+    fml <- as.formula(
+      paste("survival::Surv(y, s) ~",
+            paste(pred_names, collapse = "+")))
+  }
   
   loglik_full  <- 0
   loglik_train <- 0
@@ -528,11 +682,32 @@ compute_vvh_fold <- function(X_train, X_test,
     
     if (!all(is.finite(beta_k))) next 
     
-    dat_full <- cbind(
-      data.frame(y=c(y_train[[k]], y_test[[k]]),
-                 s=c(s_train[[k]], s_test[[k]])),
-      setNames(as.data.frame(X_full), pred_names)
-    )
+    if (has_entry) {
+      e_full <- c(entry_list_tr[[k]], entry_list_te[[k]])
+      dat_full <- cbind(
+        data.frame(entry = e_full,
+                   y=c(y_train[[k]], y_test[[k]]),
+                   s=c(s_train[[k]], s_test[[k]])),
+        setNames(as.data.frame(X_full), pred_names)
+      )
+      dat_train <- cbind(
+        data.frame(entry = entry_list_tr[[k]],
+                   y=y_train[[k]], s=s_train[[k]]),
+        setNames(as.data.frame(X_train), pred_names)
+      )
+    } else {
+      dat_full <- cbind(
+        data.frame(y=c(y_train[[k]], y_test[[k]]),
+                   s=c(s_train[[k]], s_test[[k]])),
+        setNames(as.data.frame(X_full), pred_names)
+      )
+      dat_train <- cbind(
+        data.frame(y=y_train[[k]], s=s_train[[k]]),
+        setNames(as.data.frame(X_train), pred_names)
+      )
+    }
+    
+    
     
     fit_full <- tryCatch(
       survival::coxph(fml, data = dat_full, init = beta_k,
@@ -540,14 +715,6 @@ compute_vvh_fold <- function(X_train, X_test,
                                                         timefix  = FALSE)),
       error = function(e) NULL)
     
-    dat_train <- cbind(
-      data.frame(y=y_train[[k]], s=s_train[[k]]),
-      setNames(as.data.frame(X_train), pred_names)
-    )
-    
-    dat_train <- cbind(
-      data.frame(y = y_train[[k]], s = s_train[[k]]),
-      setNames(as.data.frame(X_train), pred_names))
     
     fit_train <- tryCatch(
       survival::coxph(fml, data = dat_train, init = beta_k,
@@ -570,7 +737,8 @@ compute_vvh_fold <- function(X_train, X_test,
 ## Function to select the best lambda using V&VH criterion
 select_lambda_vvh <- function(X, y_list, status_list, R,
                               lambda_vector,
-                              group_labels = NULL,          
+                              group_labels = NULL,  
+                              entry_list = NULL,
                               method  = c("rrr_grplasso", "rrr_lasso", "rrr_ridge", "mrcox"),
                               n_folds = 5, seed = 123, ...) {
   method  <- match.arg(method)
@@ -589,10 +757,14 @@ select_lambda_vvh <- function(X, y_list, status_list, R,
     y_te <- lapply(y_list,      `[`, idx_te)
     s_tr <- lapply(status_list, `[`, idx_tr)
     s_te <- lapply(status_list, `[`, idx_te)
+    e_tr <- if (!is.null(entry_list)) lapply(entry_list, `[`, idx_tr) else NULL
+    e_te <- if (!is.null(entry_list)) lapply(entry_list, `[`, idx_te) else NULL
+    
     
     for (lam in seq_along(lambda_vector)) {
       fit <- tryCatch(
         fit_one_model(X = X_tr, y_list = y_tr, status_list = s_tr,
+                      entry_list = e_tr,
                       method = method, r = R,
                       lambda = lambda_vector[lam],
                       group_labels = group_labels, ...),
@@ -600,7 +772,9 @@ select_lambda_vvh <- function(X, y_list, status_list, R,
       
       if (is.null(fit) || !all(is.finite(fit$B_hat))) next
       
-      cve <- compute_vvh_fold(X_tr, X_te, y_tr, y_te, s_tr, s_te, fit$B_hat)
+      cve <- compute_vvh_fold(X_tr, X_te, y_tr, y_te, s_tr, s_te, fit$B_hat,
+                              entry_list_tr = e_tr,
+                              entry_list_te = e_te)
       if (!is.na(cve)) CVE_mat[fold, lam] <- cve
     }
     cat(sprintf("  [%s] fold %d/%d done\n", method, fold, n_folds))
@@ -620,6 +794,7 @@ select_lambda_vvh <- function(X, y_list, status_list, R,
 ## Function to select the best lambda wrt. "pen" method
 select_lambda_pen_vvh <- function(dlong, data_wide, R,
                                   lambda_vector, pred_names, k,
+                                  entry_list = NULL,
                                   n_folds = 5, seed = 123, ...) {
   set.seed(seed)
   subject_ids <- unique(dlong$id)
@@ -630,6 +805,15 @@ select_lambda_pen_vvh <- function(dlong, data_wide, R,
   
   n_lam <- length(lambda_vector)
   CVE_mat <- matrix(NA, n_folds, n_lam)
+  
+  has_entry <- !is.null(entry_list) && any(unlist(entry_list) != 0)
+  formula_rr <- if (has_entry) {
+    as.formula(paste("Surv(Tstart, Tstop, status) ~",
+                     paste(pred_names, collapse = "+")))
+  } else {
+    as.formula(paste("Surv(Tstart, Tstop, status) ~",
+                     paste(pred_names, collapse = "+")))
+  }
   
   for (fold in seq_len(n_folds)) {
     test_ids <- names(fold_id)[fold_id == fold]
@@ -645,8 +829,6 @@ select_lambda_pen_vvh <- function(dlong, data_wide, R,
     s_tr <- lapply(seq_len(k), function(i) data_train[[paste0("d", i)]])
     gamma_init <- make_pen_gamma_init(X_tr, y_tr, s_tr, R = R, k = k)
     
-    formula_rr <- as.formula(
-      paste("Surv(Tstop, status) ~", paste(pred_names, collapse = "+")))
     
     for (lam in seq_along(lambda_vector)) {
       raw_fit <- tryCatch({
@@ -656,7 +838,7 @@ select_lambda_pen_vvh <- function(dlong, data_wide, R,
             Gamma.iter   = gamma_init,
             lambda.alpha = lambda_vector[lam],
             lambda.gamma = lambda_vector[lam],
-            eps = 1e-3, maxit = 1e6, thresh = 1e-5,
+            eps = 1e-3, maxit = 1e6, thresh = 1e-4,
             standardize.opt = FALSE, alpha = 1, ...)
         )))
         raw_inner
@@ -700,6 +882,7 @@ simulations_fit_and_performance <- function(datas, p, k, n_simulations, r,
   
   y_list_all <- datas$y_list_all
   status_list_all <- datas$status_list_all
+  entry_list_all <- datas$entry_list_all
   X_list <- datas$X_list
   dlong_list<- datas$dlong_list
   
@@ -713,18 +896,24 @@ simulations_fit_and_performance <- function(datas, p, k, n_simulations, r,
     dlong <- if (method == "pen") dlong_list[[i]] else NULL
     
     if (method == "pen") {
-      gamma_init <- if (!is.null(pen_gamma_start)) pen_gamma_start else
-        if (p > 50 || N_obs > 500)
-          make_pen_gamma_init(X_list[[i]], y_list_all[[i]],
-                              status_list_all[[i]], R = r, k = k)
-      else matrix(rnorm(r * k), r, k)
+      gamma_init <- if (!is.null(pen_gamma_start)) {
+        pen_gamma_start
+      } else if (p > 50 || N_obs > 500) {
+        make_pen_gamma_init(X_list[[i]], y_list_all[[i]],
+                            status_list_all[[i]], R = r, k = k)
+      } else {
+        matrix(rnorm(r * k), r, k)
+      }
     } else {
       gamma_init <- NULL
     }
     
+    
     fit <- tryCatch(
       fit_one_model(X = X_list[[i]], y_list = y_list_all[[i]],
-                    status_list = status_list_all[[i]], dlong = dlong,
+                    status_list = status_list_all[[i]], 
+                    entry_list = entry_list_all[[i]],
+                    dlong = dlong,
                     method = method, r = r, lambda = lambda_alpha,
                     group_labels = group_labels,
                     pen_gamma_start = gamma_init, ...),
@@ -789,6 +978,7 @@ simulations_fit_find_best_lambda <- function(datasets_list,
     X           <- datasets_list$X_list[[j]]
     y_list      <- datasets_list$y_list_all[[j]]
     status_list <- datasets_list$status_list_all[[j]]
+    entry_list  <- datasets_list$entry_list_all[[j]]
     
     if (method == "pen") {
       o_res <- select_lambda_pen_vvh(
@@ -798,12 +988,14 @@ simulations_fit_find_best_lambda <- function(datasets_list,
         lambda_vector = lambda_vector,
         pred_names    = paste0("x", 1:p),
         k             = k,
+        entry_list    = entry_list,
         n_folds       = n_folds_0, ...)
     } else {
       o_res <- select_lambda_vvh(
         X             = X,
         y_list        = y_list,
         status_list   = status_list,
+        entry_list    = entry_list,
         R             = r,
         lambda_vector = lambda_vector,
         group_labels  = group_labels,
@@ -841,6 +1033,7 @@ subset_datas <- function(datas, n) {
   datas$T_obs_list       <- datas$T_obs_list[1:n]
   datas$data_wide_list   <- datas$data_wide_list[1:n]
   datas$Beta_matrix_list <- datas$Beta_matrix_list[1:n]
+  datas$entry_list_all   <- datas$entry_list_all[1:n]
   if (!is.null(datas$dlong_list))
     datas$dlong_list <- datas$dlong_list[1:n]
   return(datas)
@@ -1634,3 +1827,4 @@ plot_B_true_boxplot <- function(datas,
   
   return(p_out)
 }
+
