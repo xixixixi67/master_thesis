@@ -7,7 +7,7 @@ library(survival)
 #' Gamma has NO orthogonality constraint.
 #' A single lambda sequence is used for both: lambda_gamma = lambda_alpha.
 #' @return Object of class "survRRR_lasso"
-solve_RR_Lasso <- function(X, y_list, status_list, R,
+solve_RR_Lasso <- function(X, y_list, entry_list=NULL, status_list, R,
                                      lambda_alpha,
                                      rho = 0.01,
                                      alpha0 = NULL,
@@ -63,25 +63,45 @@ solve_RR_Lasso <- function(X, y_list, status_list, R,
   }
   
   order_list <- vector("list", K)
+  order_list_entry <- vector("list", K)
   status_mat <- matrix(0.0, nrow = N, ncol = K)
-  rankmin    <- matrix(0L,  nrow = N, ncol = K)
-  rankmax    <- matrix(0L,  nrow = N, ncol = K)
+  rankmin_exit    <- matrix(0L,  nrow = N, ncol = K)
+  rankmax_exit    <- matrix(0L,  nrow = N, ncol = K)
+  rankmin_entry    <- matrix(0L,  nrow = N, ncol = K)
+  
+  exit_sorted_mat  <- matrix(0.0, nrow = N, ncol = K) 
+  entry_sorted_mat <- matrix(0.0, nrow = N, ncol = K)
+  
+  if (is.null(entry_list)) {
+    if (verbose) message("entry_list not provided. Assuming all entries at time 0.")
+    entry_list <- lapply(y_list, function(y) rep(0, length(y)))
+  }
   
   for (k in 1:K) {
     y <- y_list[[k]]
     s <- status_list[[k]]
-    o <- order(y)
-    y_sorted <- y[o]
-    s_sorted <- s[o]
+    e <- entry_list[[k]]
+    o_exit <- order(y)
+    y_sorted <- y[o_exit]
+    s_sorted <- s[o_exit]
+    e_sorted_by_exit <- e[o_exit]
     
-    order_list[[k]] <- order(o) - 1L
+    order_list[[k]] <- order(o_exit) - 1L
     
     n_events <- sum(s_sorted)
     if (n_events == 0) stop(paste("Outcome", k, "has no events"))
     status_mat[, k] <- s_sorted / n_events
     
-    rankmin[, k] <- rank(y_sorted, ties.method = "min") - 1L
-    rankmax[, k] <- rank(y_sorted, ties.method = "max") - 1L
+    rankmin_exit[, k] <- rank(y_sorted, ties.method = "min") - 1L
+    rankmax_exit[, k] <- rank(y_sorted, ties.method = "max") - 1L
+    
+    exit_sorted_mat[, k] <- y_sorted
+    entry_sorted_mat[, k] <- e_sorted_by_exit
+    
+    o_entry <- order(e_sorted_by_exit)
+    order_list_entry[[k]] <- order(o_entry) - 1L
+    e_double_sorted <- e_sorted_by_exit[o_entry]
+    rankmin_entry[, k] <- rank(e_double_sorted, ties.method = "min") - 1L
   }
   
   if (ncol(alpha0) != R) stop("alpha0 must have R columns")
@@ -92,9 +112,13 @@ solve_RR_Lasso <- function(X, y_list, status_list, R,
   result <- fit_RR_Lasso(
     X                = X,
     status           = status_mat,
-    rankmin          = rankmin,
-    rankmax          = rankmax,
+    rankmin          = rankmin_exit,
+    rankmax          = rankmax_exit,
+    rankmin_entry    = rankmin_entry,
+    entry_sorted_mat = entry_sorted_mat,  
+    exit_sorted_mat  = exit_sorted_mat,
     order_list       = order_list,
+    order_list_entry = order_list_entry,
     alpha0           = alpha0,
     Gamma0           = Gamma0,
     lambda_alpha_all = lambda_alpha,
@@ -109,7 +133,6 @@ solve_RR_Lasso <- function(X, y_list, status_list, R,
   result$call         <- match.call()
   result$lambda_alpha <- lambda_alpha
   result$lambda_gamma <- lambda_gamma
-  result$R            <- R
   result$dimensions   <- list(N = N, p = p, K = K, R = R)
   
   class(result) <- "survRRR_lasso"
@@ -118,7 +141,7 @@ solve_RR_Lasso <- function(X, y_list, status_list, R,
 
 
 #' Compute Martingale-like Residuals for Reduced Rank Cox Model
-get_residual_RR_Lasso <- function(X, y_list, status_list, alpha, Gamma)
+get_residual_RR_Lasso <- function(X, y_list, entry_list=NULL,status_list, alpha, Gamma)
 {
   K <- length(y_list)
   N <- nrow(X)
@@ -130,30 +153,46 @@ get_residual_RR_Lasso <- function(X, y_list, status_list, alpha, Gamma)
   if (ncol(Gamma) != R) stop("Gamma must have R columns")
   
   order_list <- vector("list", K)
+  order_list_entry <- vector("list", K)
   status_mat <- matrix(0.0, nrow = N, ncol = K)
-  rankmin    <- matrix(0L,  nrow = N, ncol = K)
-  rankmax    <- matrix(0L,  nrow = N, ncol = K)
+  rankmin_exit    <- matrix(0L,  nrow = N, ncol = K)
+  rankmax_exit    <- matrix(0L,  nrow = N, ncol = K)
+  rankmin_entry    <- matrix(0L,  nrow = N, ncol = K)
+  exit_sorted_mat <- matrix(0.0, nrow = N, ncol = K)
+  entry_sorted_mat <- matrix(0.0, nrow = N, ncol = K) 
+  
+  if (is.null(entry_list)) {
+    entry_list <- lapply(y_list, function(y) rep(0, length(y)))
+  }
   
   for (k in 1:K) {
     y <- y_list[[k]]
     s <- status_list[[k]]
-    o <- order(y)
-    y_sorted <- y[o]
-    s_sorted <- s[o]
-    order_list[[k]] <- order(o) - 1L
+    e <- entry_list[[k]]
+    o_exit <- order(y)
+    y_sorted <- y[o_exit]
+    s_sorted <- s[o_exit]
+    e_sorted_by_exit <- e[o_exit]
+    order_list[[k]] <- order(o_exit) - 1L
     n_events <- sum(s_sorted)
     if (n_events == 0) stop(paste("Outcome", k, "has no events"))
     status_mat[, k] <- s_sorted / n_events
-    rankmin[, k] <- rank(y_sorted, ties.method = "min") - 1L
-    rankmax[, k] <- rank(y_sorted, ties.method = "max") - 1L
+    rankmin_exit[, k] <- rank(y_sorted, ties.method = "min") - 1L
+    rankmax_exit[, k] <- rank(y_sorted, ties.method = "max") - 1L
+    
+    o_entry <- order(e_sorted_by_exit)
+    order_list_entry[[k]] <- order(o_entry) - 1L
+    e_double_sorted <- e_sorted_by_exit[o_entry]
+    rankmin_entry[, k] <- rank(e_double_sorted, ties.method = "min") - 1L
   }
   
-  compute_residual_RR_Lasso(X, status_mat, rankmin, rankmax, order_list, alpha, Gamma)
+  compute_residual_RR_Lasso(X, status_mat, rankmin_exit, rankmax_exit, rankmin_entry, entry_sorted_mat, 
+                            exit_sorted_mat, order_list, order_list_entry, alpha, Gamma)
 }
 
 
 #' Print method for survRRR_lasso objects
-print.survRRR_Lasso <- function(x, ...) {
+print.survRRR_lasso <- function(x, ...) {
   cat("Reduced Rank Multi-Outcome Cox Model (Lasso on alpha and Gamma)\n")
   cat("=================================================================\n\n")
   cat("Dimensions:\n")
@@ -173,7 +212,7 @@ print.survRRR_Lasso <- function(x, ...) {
 
 
 #' Summary method for survRRR_lasso objects
-summary.survRRR_Lasso <- function(object, ...) {
+summary.survRRR_lasso <- function(object, ...) {
   print.survRRR_lasso(object)
   cat("\nObjective Function Values:\n")
   print(summary(object$objective_values))
