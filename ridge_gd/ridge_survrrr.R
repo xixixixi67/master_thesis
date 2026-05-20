@@ -84,22 +84,25 @@ solve_RR_Ridge <- function(X, y_list, entry_list=NULL, status_list, R,
     y_sorted <- y[o_exit]
     s_sorted <- s[o_exit]
     e_sorted_by_exit <- e[o_exit]
-    
+
     order_list[[k]] <- order(o_exit) - 1L
-    
+
     n_events <- sum(s_sorted)
     if (n_events == 0) stop(paste("Outcome", k, "has no events"))
     status_mat[, k] <- s_sorted / n_events
-    
+
     rankmin_exit[, k] <- rank(y_sorted, ties.method = "min") - 1L
     rankmax_exit[, k] <- rank(y_sorted, ties.method = "max") - 1L
-    
+
+    exit_sorted_mat[, k]  <- y_sorted
+    entry_sorted_mat[, k] <- e_sorted_by_exit
+
     o_entry <- order(e_sorted_by_exit)
     order_list_entry[[k]] <- order(o_entry) - 1L
     e_double_sorted <- e_sorted_by_exit[o_entry]
     rankmin_entry[, k] <- rank(e_double_sorted, ties.method = "min") - 1L
   }
-  
+
   if (ncol(alpha0) != R) stop("alpha0 must have R columns")
   if (nrow(alpha0) != p) stop("alpha0 must have p rows")
   if (ncol(Gamma0) != R) stop("Gamma0 must have R columns")
@@ -175,14 +178,17 @@ get_residual_RR_Ridge <- function(X, y_list, entry_list=NULL,status_list, alpha,
     status_mat[, k] <- s_sorted / n_events
     rankmin_exit[, k] <- rank(y_sorted, ties.method = "min") - 1L
     rankmax_exit[, k] <- rank(y_sorted, ties.method = "max") - 1L
-    
+
+    exit_sorted_mat[, k]  <- y_sorted
+    entry_sorted_mat[, k] <- e_sorted_by_exit
+
     o_entry <- order(e_sorted_by_exit)
     order_list_entry[[k]] <- order(o_entry) - 1L
     e_double_sorted <- e_sorted_by_exit[o_entry]
     rankmin_entry[, k] <- rank(e_double_sorted, ties.method = "min") - 1L
   }
-  
-  compute_residual_RR_Ridge(X, status_mat, rankmin_exit, rankmax_exit, rankmin_entry, entry_sorted_mat, 
+
+  compute_residual_RR_Ridge(X, status_mat, rankmin_exit, rankmax_exit, rankmin_entry, entry_sorted_mat,
                             exit_sorted_mat, order_list, order_list_entry, alpha, Gamma)
 }
 

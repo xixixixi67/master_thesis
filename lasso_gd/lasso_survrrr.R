@@ -178,14 +178,17 @@ get_residual_RR_Lasso <- function(X, y_list, entry_list=NULL,status_list, alpha,
     status_mat[, k] <- s_sorted / n_events
     rankmin_exit[, k] <- rank(y_sorted, ties.method = "min") - 1L
     rankmax_exit[, k] <- rank(y_sorted, ties.method = "max") - 1L
-    
+
+    exit_sorted_mat[, k]  <- y_sorted
+    entry_sorted_mat[, k] <- e_sorted_by_exit
+
     o_entry <- order(e_sorted_by_exit)
     order_list_entry[[k]] <- order(o_entry) - 1L
     e_double_sorted <- e_sorted_by_exit[o_entry]
     rankmin_entry[, k] <- rank(e_double_sorted, ties.method = "min") - 1L
   }
-  
-  compute_residual_RR_Lasso(X, status_mat, rankmin_exit, rankmax_exit, rankmin_entry, entry_sorted_mat, 
+
+  compute_residual_RR_Lasso(X, status_mat, rankmin_exit, rankmax_exit, rankmin_entry, entry_sorted_mat,
                             exit_sorted_mat, order_list, order_list_entry, alpha, Gamma)
 }
 
