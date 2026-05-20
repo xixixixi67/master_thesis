@@ -8,15 +8,15 @@ library(survival)
 #' A single lambda sequence is used for both: lambda_gamma = lambda_alpha.
 #' @return Object of class "survRRR_lasso"
 solve_RR_Lasso <- function(X, y_list, entry_list=NULL, status_list, R,
-                                     lambda_alpha,
-                                     rho = 0.01,
-                                     alpha0 = NULL,
-                                     Gamma0 = NULL,
-                                     noise_sd = 0.1,
-                                     step_size = 0.01,
-                                     max_iter = 500,
-                                     tol = 1e-4,
-                                     verbose = FALSE)
+                           lambda_alpha,
+                           rho = 0.01,
+                           alpha0 = NULL,
+                           Gamma0 = NULL,
+                           noise_sd = 0.1,
+                           step_size = 0.01,
+                           max_iter = 500,
+                           tol = 1e-4,
+                           verbose = FALSE)
 {
   if (!is.matrix(X)) {
     stop("X must be a matrix")
@@ -140,7 +140,6 @@ solve_RR_Lasso <- function(X, y_list, entry_list=NULL, status_list, R,
 }
 
 
-#' Compute Martingale-like Residuals for Reduced Rank Cox Model
 get_residual_RR_Lasso <- function(X, y_list, entry_list=NULL,status_list, alpha, Gamma)
 {
   K <- length(y_list)

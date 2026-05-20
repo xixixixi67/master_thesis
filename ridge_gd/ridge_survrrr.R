@@ -137,7 +137,6 @@ solve_RR_Ridge <- function(X, y_list, entry_list=NULL, status_list, R,
 
 
 
-#' Compute Residuals for Reduced Rank Cox Model
 get_residual_RR_Ridge <- function(X, y_list, entry_list=NULL,status_list, alpha, Gamma)
 {
   K <- length(y_list)

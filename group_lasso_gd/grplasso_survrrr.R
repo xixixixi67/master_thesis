@@ -1,17 +1,18 @@
 library(glmnet)
 library(survival)
 
+# return a list with alpha, Gamma, objective_values, num_iterations, ls_fails
 solve_RR_GrpLasso <- function(X, y_list, status_list, R,
-                           lambda_alpha,group_labels,
-                           entry_list = NULL,
-                           rho = 0.01,
-                           alpha0 = NULL,
-                           Gamma0 = NULL,
-                           noise_sd = 0.1,
-                           step_size = 0.01,
-                           max_iter = 500,
-                           tol = 1e-4,
-                           verbose = FALSE)
+                              lambda_alpha,group_labels,
+                              entry_list = NULL,
+                              rho = 0.01,
+                              alpha0 = NULL,
+                              Gamma0 = NULL,
+                              noise_sd = 0.1,
+                              step_size = 0.01,
+                              max_iter = 500,
+                              tol = 1e-4,
+                              verbose = FALSE)
 {
   if (!is.matrix(X)) {
     stop("X must be a matrix")
@@ -29,7 +30,10 @@ solve_RR_GrpLasso <- function(X, y_list, status_list, R,
   N <- nrow(X)
   p <- ncol(X)
   
-  
+  # run a ridge regression independently for each survival outcome using glmnet,
+  # concatenate these estimates into a matrix and then perform SVD,
+  # compress the high-dimensional information into a low-rank space,
+  # and then add a small amount of random noise (noise_sd) to break the symmetry
   if (is.null(alpha0) || is.null(Gamma0)) {
     B0 <- matrix(0, p, K)
     for (k in 1:K) {
@@ -58,6 +62,8 @@ solve_RR_GrpLasso <- function(X, y_list, status_list, R,
     if (is.null(Gamma0)) Gamma0 <- Gamma0_perturbed   # K x R
   }
   
+  # compute the order of exit times and entry times for each outcome, and the corresponding status indicators and ranks
+  # these are needed for computing the negative log-partial-likelihood and its gradient efficiently in C++
   order_list <- vector("list", K)
   order_list_entry <- vector("list", K)
   status_mat <- matrix(0.0, nrow = N, ncol = K)
@@ -134,7 +140,7 @@ solve_RR_GrpLasso <- function(X, y_list, status_list, R,
   return(result)
 }
 
-# compute residuals
+# return a list with residual matrix and optionally the current value of negative log-partial-likelihood
 get_residual_RR_GrpLasso <- function(X, y_list, entry_list=NULL, status_list, alpha, Gamma)
 {
   K <- length(y_list)
