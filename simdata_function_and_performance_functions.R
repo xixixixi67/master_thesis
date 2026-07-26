@@ -1278,7 +1278,6 @@ comparison_at_rank <- function(auto_list, r, method_names) {
                         mean_corr = NA))
     perf <- entry$performance
     data.frame(method        = method_names[i],
-               best_rank     = rank_label,
                mean_bias     = mean(perf$bias1),
                mean_mse      = mean(perf$mse1),
                mean_rel_bias = mean(perf$rel_bias1),
